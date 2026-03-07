@@ -616,10 +616,53 @@ class ParameterPanel(QWidget):
         self.lbl_mon_fixed_dim = QLabel("固定维度 (Fixed Dim): Z")
         self.lbl_mon_fixed_dim.setStyleSheet("color: gray; font-style: italic;")
         
+        # Range inputs
+        self.range_group = QGroupBox("范围设置 (Range Settings)")
+        range_layout = QFormLayout()
+        
+        self.lbl_range1 = QLabel("Range 1:")
+        self.sb_range1_min = QDoubleSpinBox()
+        self.sb_range1_min.setRange(-100000, 100000)
+        self.sb_range1_min.setSuffix(" um")
+        self.sb_range1_max = QDoubleSpinBox()
+        self.sb_range1_max.setRange(-100000, 100000)
+        self.sb_range1_max.setSuffix(" um")
+        
+        r1_layout = QHBoxLayout()
+        r1_layout.addWidget(QLabel("Min:"))
+        r1_layout.addWidget(self.sb_range1_min)
+        r1_layout.addWidget(QLabel("Max:"))
+        r1_layout.addWidget(self.sb_range1_max)
+        
+        self.lbl_range2 = QLabel("Range 2:")
+        self.sb_range2_min = QDoubleSpinBox()
+        self.sb_range2_min.setRange(-100000, 100000)
+        self.sb_range2_min.setSuffix(" um")
+        self.sb_range2_max = QDoubleSpinBox()
+        self.sb_range2_max.setRange(-100000, 100000)
+        self.sb_range2_max.setSuffix(" um")
+        
+        r2_layout = QHBoxLayout()
+        r2_layout.addWidget(QLabel("Min:"))
+        r2_layout.addWidget(self.sb_range2_min)
+        r2_layout.addWidget(QLabel("Max:"))
+        r2_layout.addWidget(self.sb_range2_max)
+        
+        range_layout.addRow(self.lbl_range1, r1_layout)
+        range_layout.addRow(self.lbl_range2, r2_layout)
+        self.range_group.setLayout(range_layout)
+        
+        # Connect range changes
+        self.sb_range1_min.valueChanged.connect(self.update_current_monitor)
+        self.sb_range1_max.valueChanged.connect(self.update_current_monitor)
+        self.sb_range2_min.valueChanged.connect(self.update_current_monitor)
+        self.sb_range2_max.valueChanged.connect(self.update_current_monitor)
+        
         settings_layout.addRow(self.lbl_mon_pos_label, self.sb_mon_pos)
         settings_layout.addRow("", self.lbl_mon_fixed_dim) # Indented label
         settings_layout.addRow("切面 (Plane):", self.combo_mon_plane)
         settings_layout.addRow("数据类型 (Data Type):", self.combo_mon_type)
+        settings_layout.addRow(self.range_group)
         
         self.btn_export_data = QPushButton("导出监视器数据 (Export Data)")
         self.btn_export_data.clicked.connect(self.export_monitor_data)
@@ -719,15 +762,31 @@ class ParameterPanel(QWidget):
             self.combo_mon_plane.blockSignals(True)
             self.combo_mon_type.blockSignals(True)
             
+            self.sb_range1_min.blockSignals(True)
+            self.sb_range1_max.blockSignals(True)
+            self.sb_range2_min.blockSignals(True)
+            self.sb_range2_max.blockSignals(True)
+            
             # Use 'pos' if available, fallback to 'z'
             pos = monitor.get('pos', monitor.get('z', 0.0))
             self.sb_mon_pos.setValue(pos)
             self.combo_mon_plane.setCurrentIndex(monitor['plane'])
             self.combo_mon_type.setCurrentIndex(monitor['type'])
             
+            # Load ranges (default to huge range if missing)
+            self.sb_range1_min.setValue(monitor.get('range1_min', -1000.0))
+            self.sb_range1_max.setValue(monitor.get('range1_max', 1000.0))
+            self.sb_range2_min.setValue(monitor.get('range2_min', -1000.0))
+            self.sb_range2_max.setValue(monitor.get('range2_max', 1000.0))
+            
             self.sb_mon_pos.blockSignals(False)
             self.combo_mon_plane.blockSignals(False)
             self.combo_mon_type.blockSignals(False)
+            
+            self.sb_range1_min.blockSignals(False)
+            self.sb_range1_max.blockSignals(False)
+            self.sb_range2_min.blockSignals(False)
+            self.sb_range2_max.blockSignals(False)
             
             self.update_monitor_ui_state()
         else:
@@ -753,12 +812,18 @@ class ParameterPanel(QWidget):
             self.sb_mon_pos.setRange(-100000, 100000)
             self.sb_mon_pos.setStyleSheet("") # Clear warning
             
+            self.lbl_range1.setText("X Range:")
+            self.lbl_range2.setText("Y Range:")
+            
         elif idx == 1: # YZ Plane (Normal X)
             self.lbl_mon_pos_label.setText("设置 X 轴位置 (Set X Position):")
             self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): X-Axis")
             self.sb_mon_pos.setSuffix(" um")
             # X range validation
             self.sb_mon_pos.setRange(-x_max * 1.5, x_max * 1.5) # Allow slight over, warn if out
+            
+            self.lbl_range1.setText("Y Range:")
+            self.lbl_range2.setText("Z Range:")
             
         elif idx == 2: # XZ Plane (Normal Y)
             self.lbl_mon_pos_label.setText("设置 Y 轴位置 (Set Y Position):")
@@ -767,8 +832,41 @@ class ParameterPanel(QWidget):
             # Y range validation
             self.sb_mon_pos.setRange(-y_max * 1.5, y_max * 1.5)
 
+            self.lbl_range1.setText("X Range:")
+            self.lbl_range2.setText("Z Range:")
+
         # Validate current value
         self.validate_monitor_pos()
+        self.validate_monitor_ranges()
+
+    def validate_monitor_ranges(self):
+        # Validate Min < Max
+        r1_min = self.sb_range1_min.value()
+        r1_max = self.sb_range1_max.value()
+        r2_min = self.sb_range2_min.value()
+        r2_max = self.sb_range2_max.value()
+        
+        valid = True
+        if r1_min >= r1_max:
+            self.sb_range1_min.setStyleSheet("border: 1px solid red;")
+            self.sb_range1_max.setStyleSheet("border: 1px solid red;")
+            valid = False
+        else:
+            self.sb_range1_min.setStyleSheet("")
+            self.sb_range1_max.setStyleSheet("")
+            
+        if r2_min >= r2_max:
+            self.sb_range2_min.setStyleSheet("border: 1px solid red;")
+            self.sb_range2_max.setStyleSheet("border: 1px solid red;")
+            valid = False
+        else:
+            self.sb_range2_min.setStyleSheet("")
+            self.sb_range2_max.setStyleSheet("")
+            
+        # Disable OK button? No OK button here, real-time update.
+        # But we should maybe disable Run if invalid?
+        # For now just visual cue.
+
 
     def validate_monitor_pos(self):
         idx = self.combo_mon_plane.currentIndex()
@@ -841,7 +939,168 @@ class ParameterPanel(QWidget):
             monitor['plane'] = new_plane
             monitor['type'] = self.combo_mon_type.currentIndex()
             
+            monitor['range1_min'] = self.sb_range1_min.value()
+            monitor['range1_max'] = self.sb_range1_max.value()
+            monitor['range2_min'] = self.sb_range2_min.value()
+            monitor['range2_max'] = self.sb_range2_max.value()
+            
             self.validate_monitor_pos()
+            self.validate_monitor_ranges()
+
+    def get_project_data(self) -> dict:
+        """
+        Gather all parameters for project saving
+        """
+        data = {}
+        
+        # Grid
+        data['grid'] = {
+            'direction': 'z' if self.rb_z.isChecked() else ('y' if self.rb_y.isChecked() else 'x'),
+            'nx': self.sb_nx.value(),
+            'ny': self.sb_ny.value(),
+            'dx': self.sb_dx.value(),
+            'dy': self.sb_dy.value(),
+            'wavelength': self.sb_wavelength.value()
+        }
+        
+        # Source
+        vars_list = []
+        for row in range(self.table_vars.rowCount()):
+            vars_list.append({
+                'name': self.table_vars.item(row, 0).text(),
+                'value': self.table_vars.item(row, 1).text()
+            })
+            
+        data['source'] = {
+            'type_idx': self.combo_source.currentIndex(),
+            'amplitude': self.sb_amplitude.value(),
+            'z_pos': self.sb_z_pos.value(),
+            'normalize': self.cb_normalize.isChecked(),
+            'w0': self.sb_w0.value(),
+            'lg_w0': self.sb_lg_w0.value(),
+            'lg_p': self.sb_lg_p.value(),
+            'lg_l': self.sb_lg_l.value(),
+            'bessel_w0': self.sb_bessel_w0.value(),
+            'custom': {
+                'coord_sys': self.combo_coord_sys.currentIndex(),
+                'equation': self.txt_equation.toPlainText(),
+                'variables': vars_list
+            }
+        }
+        
+        # Modulators
+        for prefix in ['mod1', 'mod2']:
+            mod_data = {
+                'z': getattr(self, f"sb_{prefix}_z").value(),
+                'z_unit': getattr(self, f"combo_{prefix}_z_unit").currentText(),
+                'type_idx': getattr(self, f"combo_{prefix}_type").currentIndex(),
+                'lens': {
+                    'D': getattr(self, f"sb_{prefix}_D").value(),
+                    'D_unit': getattr(self, f"combo_{prefix}_D_unit").currentText(),
+                    'f': getattr(self, f"sb_{prefix}_f").value(),
+                    'f_unit': getattr(self, f"combo_{prefix}_f_unit").currentText(),
+                    'NA': getattr(self, f"sb_{prefix}_NA").value()
+                }
+            }
+            # Paths
+            if prefix == 'mod1':
+                mod_data['phase_path'] = self.mod1_phase_path
+                mod_data['amp_path'] = self.mod1_amp_path
+            else:
+                mod_data['phase_path'] = self.mod2_phase_path
+                mod_data['angle_path'] = self.mod2_angle_path
+                
+            data[prefix] = mod_data
+            
+        # Monitors
+        data['monitors'] = self.monitors
+        
+        return data
+
+    def load_project_data(self, data: dict):
+        """
+        Load parameters from project data
+        """
+        if not data: return
+        
+        # Block signals globally if possible, or just be careful
+        # Grid
+        if 'grid' in data:
+            g = data['grid']
+            d = g.get('direction', 'z')
+            if d == 'x': self.rb_x.setChecked(True)
+            elif d == 'y': self.rb_y.setChecked(True)
+            else: self.rb_z.setChecked(True)
+            
+            self.sb_nx.setValue(g.get('nx', 512))
+            self.sb_ny.setValue(g.get('ny', 512))
+            self.sb_dx.setValue(g.get('dx', 1.0))
+            self.sb_dy.setValue(g.get('dy', 1.0))
+            self.sb_wavelength.setValue(g.get('wavelength', 0.532))
+            
+        # Source
+        if 'source' in data:
+            s = data['source']
+            self.combo_source.setCurrentIndex(s.get('type_idx', 0))
+            self.sb_amplitude.setValue(s.get('amplitude', 1.0))
+            self.sb_z_pos.setValue(s.get('z_pos', 0.0))
+            self.cb_normalize.setChecked(s.get('normalize', False))
+            self.sb_w0.setValue(s.get('w0', 100.0))
+            self.sb_lg_w0.setValue(s.get('lg_w0', 100.0))
+            self.sb_lg_p.setValue(s.get('lg_p', 0))
+            self.sb_lg_l.setValue(s.get('lg_l', 1))
+            self.sb_bessel_w0.setValue(s.get('bessel_w0', 100.0))
+            
+            if 'custom' in s:
+                c = s['custom']
+                self.combo_coord_sys.setCurrentIndex(c.get('coord_sys', 0))
+                self.txt_equation.setPlainText(c.get('equation', ''))
+                
+                # Table
+                vars_list = c.get('variables', [])
+                self.table_vars.setRowCount(0)
+                for i, v in enumerate(vars_list):
+                    self.table_vars.insertRow(i)
+                    self.table_vars.setItem(i, 0, QTableWidgetItem(v['name']))
+                    self.table_vars.setItem(i, 1, QTableWidgetItem(v['value']))
+                    
+        # Modulators
+        for prefix in ['mod1', 'mod2']:
+            if prefix in data:
+                m = data[prefix]
+                getattr(self, f"sb_{prefix}_z").setValue(m.get('z', 0))
+                getattr(self, f"combo_{prefix}_z_unit").setCurrentText(m.get('z_unit', 'um'))
+                getattr(self, f"combo_{prefix}_type").setCurrentIndex(m.get('type_idx', 0))
+                
+                if 'lens' in m:
+                    l = m['lens']
+                    getattr(self, f"sb_{prefix}_D").setValue(l.get('D', 25400))
+                    getattr(self, f"combo_{prefix}_D_unit").setCurrentText(l.get('D_unit', 'um'))
+                    getattr(self, f"sb_{prefix}_f").setValue(l.get('f', 100000))
+                    getattr(self, f"combo_{prefix}_f_unit").setCurrentText(l.get('f_unit', 'um'))
+                    getattr(self, f"sb_{prefix}_NA").setValue(l.get('NA', 0.127))
+                    
+                # Load files if paths exist
+                # This might fail if files moved. Log warning?
+                # For now, just try to set path and maybe reload if simple.
+                # Actually, `load_data` takes a path.
+                if prefix == 'mod1':
+                    if m.get('phase_path'): self.load_data('phase1', m['phase_path'])
+                    if m.get('amp_path'): self.load_data('amp1', m['amp_path'])
+                else:
+                    if m.get('phase_path'): self.load_data('phase2', m['phase_path'])
+                    if m.get('angle_path'): self.load_data('angle2', m['angle_path'])
+                    
+        # Monitors
+        if 'monitors' in data:
+            self.monitors = data['monitors']
+            self.monitor_list.clear()
+            for m in self.monitors:
+                self.monitor_list.addItem(m['name'])
+            
+            # Select first if exists
+            if self.monitors:
+                self.monitor_list.setCurrentRow(0)
 
     def load_data(self, target, path=None):
         """
@@ -889,3 +1148,4 @@ class ParameterPanel(QWidget):
                 QMessageBox.critical(self, "Error", f"Error loading file: {str(e)}")
             else:
                 print(f"Error loading background file {filename}: {e}")
+

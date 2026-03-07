@@ -9,23 +9,18 @@ class Monitor:
     """
     光场监视器 (Optical Field Monitor)
     """
-    def __init__(self, position_z: float, name: str = "monitor", plane_type: int = 0, fixed_value: float = 0.0):
+    def __init__(self, position_z: float, name: str = "monitor", plane_type: int = 0, fixed_value: float = 0.0, ranges: dict = None):
         """
-        :param position_z: Position along propagation axis (for XY plane). Ignored/used as range end for YZ/XZ?
-                           Actually for YZ/XZ, position_z might be the Z location of the monitor if it was a point?
-                           But in this architecture, monitors are placed at 'events'.
-                           For YZ/XZ, the 'z' in the event list usually denotes where to START or END recording?
-                           Or maybe we just record EVERYTHING?
-                           User request says "Monitor Plane Type... YZ Plane... Set X Position".
-                           So the monitor is defined by (Type=YZ, X=fixed_value).
-                           It doesn't specify Z range. Implicitly it covers the simulation Z range.
+        :param position_z: Position along propagation axis (for XY plane).
         :param plane_type: 0=XY (Normal Z), 1=YZ (Normal X), 2=XZ (Normal Y)
         :param fixed_value: The value of the fixed dimension (X for YZ, Y for XZ).
+        :param ranges: Dictionary defining min/max for axes, e.g., {'x': (-10, 10), 'y': (-10, 10), 'z': (0, 100)}
         """
-        self.position_z = position_z # Keep this for compatibility, but for YZ/XZ it might be irrelevant or mean "center Z"?
+        self.position_z = position_z 
         self.name = name
         self.plane_type = plane_type
         self.fixed_value = fixed_value
+        self.ranges = ranges if ranges else {}
         
         self.field_data = None # Complex field data (numpy array)
         self.intensity_data = None # Intensity data (numpy array)
@@ -41,13 +36,47 @@ class Monitor:
         获取几何参数信息 (Get geometric parameters)
         Requirements: Print origin, normal, span.
         """
+        info = ""
         if self.plane_type == 0:
-            return f"Monitor '{self.name}': Type=XY (Normal Z), Z={self.position_z * 1e6:.3f} um, Normal=(0,0,1)"
+            info = f"Monitor '{self.name}': Type=XY (Normal Z), Z={self.position_z * 1e6:.3f} um, Normal=(0,0,1)"
         elif self.plane_type == 1:
-            return f"Monitor '{self.name}': Type=YZ (Normal X), X={self.fixed_value * 1e6:.3f} um, Normal=(1,0,0)"
+            info = f"Monitor '{self.name}': Type=YZ (Normal X), X={self.fixed_value * 1e6:.3f} um, Normal=(1,0,0)"
         elif self.plane_type == 2:
-            return f"Monitor '{self.name}': Type=XZ (Normal Y), Y={self.fixed_value * 1e6:.3f} um, Normal=(0,1,0)"
-        return "Unknown"
+            info = f"Monitor '{self.name}': Type=XZ (Normal Y), Y={self.fixed_value * 1e6:.3f} um, Normal=(0,1,0)"
+        else:
+            info = "Unknown"
+            
+        if self.ranges:
+            info += f", Ranges={self.ranges}"
+        return info
+
+    def _is_in_range(self, val, axis):
+        if axis not in self.ranges:
+            return True
+        min_v, max_v = self.ranges[axis]
+        # Convert um range to meters? Assuming ranges passed in meters to match internal logic?
+        # User input is um. Monitor usually stores SI. Let's assume ranges are SI (meters).
+        return min_v <= val <= max_v
+
+    def _get_slice_indices(self, axis_values, axis_name):
+        """
+        Get indices for slicing based on range
+        """
+        if axis_name not in self.ranges:
+            return slice(None), axis_values
+            
+        min_v, max_v = self.ranges[axis_name]
+        # Assuming axis_values is sorted
+        # Using numpy searchsorted or boolean mask
+        mask = (axis_values >= min_v) & (axis_values <= max_v)
+        if not np.any(mask):
+            return slice(0, 0), np.array([])
+            
+        # Find first and last True
+        # Optimization: finding indices
+        indices = np.where(mask)[0]
+        start, end = indices[0], indices[-1] + 1
+        return slice(start, end), axis_values[start:end]
 
     def record(self, field: OpticalField, current_z: float):
         """
@@ -56,42 +85,60 @@ class Monitor:
         :param current_z: Current Z position of the field
         """
         if self.plane_type == 0: # XY Plane
-            # For XY plane, we typically record at a specific Z.
-            # If this method is called, we assume it's the right Z.
-            # But in the stepping loop, we might call it many times.
-            # We should only record if current_z is close to self.position_z.
-            # However, the event-based loop usually calls this ONLY when we are at the event Z.
-            # So we can just overwrite.
-            self.field_data = field.to_numpy()
+            # XY Plane usually records at specific Z.
+            # If ranges are set for X and Y, we slice.
+            
+            # Get full field first (on CPU)
+            full_field = field.to_numpy() # (Ny, Nx)
+            
+            # Get axes
+            x_axis = field.grid.X[0, :] # 1D array
+            y_axis = field.grid.Y[:, 0] # 1D array
+            
+            # Slice X
+            sl_x, self.grid_x = self._get_slice_indices(x_axis, 'x')
+            # Slice Y
+            sl_y, self.grid_y = self._get_slice_indices(y_axis, 'y')
+            
+            # Apply slices
+            # full_field is (Ny, Nx) -> (Y, X)
+            self.field_data = full_field[sl_y, sl_x]
             self.intensity_data = np.abs(self.field_data)**2
-            self.grid_x = field.grid.X
-            self.grid_y = field.grid.Y
             
         elif self.plane_type == 1: # YZ Plane (Fixed X)
+            # Check Z range first
+            if not self._is_in_range(current_z, 'z'):
+                return
+
             # Slice field at X = fixed_value
-            # Grid X is (ny, nx), varying along columns. X[0, :] gives x-axis.
-            # We assume grid is uniform.
+            # We need the full x_axis to find the index of fixed_value
+            # But we don't slice X range here (since X is fixed).
+            # We slice Y range.
+            
             x_axis = np.linspace(-field.grid.nx/2 * field.grid.dx, field.grid.nx/2 * field.grid.dx, field.grid.nx)
-            # Find closest index
-            # Convert fixed_value (um usually passed from UI, but here we expect meters? 
-            # Wait, Monitor stores SI units usually. Main window handles unit conversion.)
-            # Assuming fixed_value is in meters.
             idx = (np.abs(x_axis - self.fixed_value)).argmin()
             
             # Field E is (ny, nx). We want column idx.
             # field.E is on device.
             slice_data = field.E[:, idx].cpu().numpy() # Shape (ny,)
             
-            self.slice_buffer.append(slice_data)
+            # Slice Y
+            y_axis = np.linspace(-field.grid.ny/2 * field.grid.dy, field.grid.ny/2 * field.grid.dy, field.grid.ny)
+            sl_y, sliced_y_axis = self._get_slice_indices(y_axis, 'y')
+            
+            final_slice = slice_data[sl_y]
+            
+            self.slice_buffer.append(final_slice)
             self.z_coords.append(current_z)
             
-            if self.grid_y is None:
-                # For YZ plane, the "horizontal" axis in the plot will be Z, "vertical" will be Y.
-                # Or vice versa. Let's store Y axis.
-                y_axis = np.linspace(-field.grid.ny/2 * field.grid.dy, field.grid.ny/2 * field.grid.dy, field.grid.ny)
-                self.grid_y = y_axis
-
+            # Update grid_y only once (or overwrite, it should be same)
+            self.grid_y = sliced_y_axis
+            
         elif self.plane_type == 2: # XZ Plane (Fixed Y)
+            # Check Z range
+            if not self._is_in_range(current_z, 'z'):
+                return
+
             # Slice field at Y = fixed_value
             y_axis = np.linspace(-field.grid.ny/2 * field.grid.dy, field.grid.ny/2 * field.grid.dy, field.grid.ny)
             idx = (np.abs(y_axis - self.fixed_value)).argmin()
@@ -99,12 +146,16 @@ class Monitor:
             # Field E is (ny, nx). We want row idx.
             slice_data = field.E[idx, :].cpu().numpy() # Shape (nx,)
             
-            self.slice_buffer.append(slice_data)
+            # Slice X
+            x_axis = np.linspace(-field.grid.nx/2 * field.grid.dx, field.grid.nx/2 * field.grid.dx, field.grid.nx)
+            sl_x, sliced_x_axis = self._get_slice_indices(x_axis, 'x')
+            
+            final_slice = slice_data[sl_x]
+            
+            self.slice_buffer.append(final_slice)
             self.z_coords.append(current_z)
             
-            if self.grid_x is None:
-                x_axis = np.linspace(-field.grid.nx/2 * field.grid.dx, field.grid.nx/2 * field.grid.dx, field.grid.nx)
-                self.grid_x = x_axis
+            self.grid_x = sliced_x_axis
 
     def finalize(self):
         """

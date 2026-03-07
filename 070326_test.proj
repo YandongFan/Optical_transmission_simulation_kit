@@ -1,0 +1,79 @@
+{
+    "grid": {
+        "direction": "z",
+        "nx": 512.0,
+        "ny": 512.0,
+        "dx": 0.2,
+        "dy": 0.2,
+        "wavelength": 0.78
+    },
+    "source": {
+        "type_idx": 2,
+        "amplitude": 1.0,
+        "z_pos": 0.0,
+        "normalize": true,
+        "w0": 100.0,
+        "lg_w0": 20.0,
+        "lg_p": 0,
+        "lg_l": 1,
+        "bessel_w0": 100.0,
+        "custom": {
+            "coord_sys": 0,
+            "equation": "",
+            "variables": []
+        }
+    },
+    "mod1": {
+        "z": 10000.0,
+        "z_unit": "um",
+        "type_idx": 0,
+        "lens": {
+            "D": 25400.0,
+            "D_unit": "um",
+            "f": 100000.0,
+            "f_unit": "um",
+            "NA": 0.13
+        },
+        "phase_path": null,
+        "amp_path": null
+    },
+    "mod2": {
+        "z": 20000.0,
+        "z_unit": "um",
+        "type_idx": 0,
+        "lens": {
+            "D": 25400.0,
+            "D_unit": "um",
+            "f": 100000.0,
+            "f_unit": "um",
+            "NA": 0.13
+        },
+        "phase_path": null,
+        "angle_path": null
+    },
+    "monitors": [
+        {
+            "name": "Monitor 1",
+            "z": 0.0,
+            "plane": 1,
+            "type": 1,
+            "pos": 0.0,
+            "range1_min": -50.0,
+            "range1_max": 50.0,
+            "range2_min": -50.0,
+            "range2_max": 50.0
+        },
+        {
+            "name": "Monitor 2",
+            "z": 0.0,
+            "plane": 2,
+            "type": 0,
+            "pos": 0.0,
+            "range1_min": -50.0,
+            "range1_max": 50.0,
+            "range2_min": -50.0,
+            "range2_max": 50.0
+        }
+    ],
+    "version": "1.0"
+}

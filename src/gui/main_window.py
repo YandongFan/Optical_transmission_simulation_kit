@@ -1,8 +1,11 @@
 import sys
 import os
+import json
 import numpy as np
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QSplitter, QStatusBar, QProgressBar, QApplication, QMessageBox)
+                             QSplitter, QStatusBar, QProgressBar, QApplication, QMessageBox,
+                             QMenuBar, QMenu, QFileDialog)
+from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 
 from src.gui.parameter_panel import ParameterPanel
@@ -26,6 +29,9 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
+        
+        # Menu Bar
+        self.create_menu_bar()
         
         # Splitter for resizable panels
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -69,6 +75,58 @@ class MainWindow(QMainWindow):
             self.device = 'cpu'
             
         self.status_bar.showMessage(f"Ready. Device: {self.device}")
+
+    def create_menu_bar(self):
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("文件 (File)")
+        
+        save_action = QAction("保存工程 (Save Project)", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+        
+        load_action = QAction("导入工程 (Load Project)", self)
+        load_action.setShortcut("Ctrl+O")
+        load_action.triggered.connect(self.load_project)
+        file_menu.addAction(load_action)
+
+    def save_project(self):
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Project Files (*.proj)")
+        if not filename:
+            return
+            
+        try:
+            data = self.parameter_panel.get_project_data()
+            data['version'] = '1.0'
+            
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
+                
+            self.setWindowTitle(f"[*] {os.path.basename(filename)}")
+            self.status_bar.showMessage("Project saved.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save project: {str(e)}")
+
+    def load_project(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Load Project", "", "Project Files (*.proj)")
+        if not filename:
+            return
+            
+        try:
+            with open(filename, 'r') as f:
+                data = json.load(f)
+                
+            # Version check (basic)
+            if 'version' not in data:
+                print("Warning: No version found in project file.")
+                
+            self.parameter_panel.load_project_data(data)
+            self.on_preview()
+            self.setWindowTitle(f"[*] {os.path.basename(filename)}")
+            self.status_bar.showMessage("Project loaded.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load project: {str(e)}")
 
     def get_source_params(self):
         """
@@ -271,10 +329,26 @@ class MainWindow(QMainWindow):
                     pos_val = m.get('pos', m.get('z', 0)) # um
                     fixed_val_m = pos_val * 1e-6
                     
+                    # Ranges
+                    ranges = {}
+                    if plane_type == 0: # XY
+                        ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                        ranges['y'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                    elif plane_type == 1: # YZ
+                        ranges['y'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                        ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                    elif plane_type == 2: # XZ
+                        ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                        ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                    
                     mon_obj = Monitor(position_z=fixed_val_m if plane_type==0 else 0, # Z for XY
                                       name=m['name'], 
                                       plane_type=plane_type,
-                                      fixed_value=fixed_val_m)
+                                      fixed_value=fixed_val_m,
+                                      ranges=ranges)
+                    
+                    # Store type for visualization
+                    mon_obj.data_type = m.get('type', 0)
                     
                     # Print geometry info (Req 3.1)
                     # print(mon_obj.get_geometry_info()) # Monitor might not have this method yet?
@@ -467,4 +541,11 @@ class MainWindow(QMainWindow):
         # But monitor.field_data should be shaped correctly by finalize() or record()
         phase = np.angle(field)
         
-        self.visualization_panel.add_monitor_result(name, field, intensity, phase, x, y)
+        complex_real = None
+        complex_imag = None
+        if getattr(monitor, 'data_type', 0) == 1: # Complex Field
+            complex_real = np.real(field)
+            complex_imag = np.imag(field)
+        
+        self.visualization_panel.add_monitor_result(name, field, intensity, phase, x, y, 
+                                                    complex_real=complex_real, complex_imag=complex_imag)

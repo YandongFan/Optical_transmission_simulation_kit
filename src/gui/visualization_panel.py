@@ -50,7 +50,7 @@ class VisualizationPanel(QWidget):
         self.phase_canvas.clear()
         self.cross_section_canvas.clear()
 
-    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y):
+    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, complex_real=None, complex_imag=None):
         """
         添加监视器结果 (Add monitor result)
         """
@@ -59,7 +59,9 @@ class VisualizationPanel(QWidget):
             'intensity': intensity_data,
             'phase': phase_data,
             'x': x,
-            'y': y
+            'y': y,
+            'complex_real': complex_real,
+            'complex_imag': complex_imag
         }
         
         # Add to combo box if not exists
@@ -79,9 +81,10 @@ class VisualizationPanel(QWidget):
         name = self.combo_monitors.currentText()
         if name in self.monitor_data:
             data = self.monitor_data[name]
-            self.update_plots(data['field'], data['intensity'], data['phase'], data['x'], data['y'])
+            self.update_plots(data['field'], data['intensity'], data['phase'], data['x'], data['y'], 
+                              data.get('complex_real'), data.get('complex_imag'))
 
-    def update_plots(self, field_data, intensity_data, phase_data, x, y):
+    def update_plots(self, field_data, intensity_data, phase_data, x, y, complex_real=None, complex_imag=None):
         """
         更新绘图 (Update plots)
         """
@@ -107,6 +110,25 @@ class VisualizationPanel(QWidget):
             
         self.cross_section_canvas.plot_line(x_line, intensity_data[mid_row, :], 
                                           f"Cross Section (y={y.mean():.2f} um)", "x (um)", "Intensity")
+
+        # Handle Complex Field Tabs
+        # Tabs indices: 0:Intensity, 1:Phase, 2:CrossSection
+        # We want 3:Real, 4:Imag
+        
+        # Remove existing extra tabs if any
+        while self.tabs.count() > 3:
+            self.tabs.removeTab(3)
+            
+        if complex_real is not None and complex_imag is not None:
+            # Add Real Tab
+            real_canvas = PlotCanvas(self, width=5, height=4)
+            self.tabs.addTab(real_canvas, "complex field (real E)")
+            real_canvas.plot_heatmap(complex_real, extent, "Real Part of E-field", cmap='bwr')
+            
+            # Add Imag Tab
+            imag_canvas = PlotCanvas(self, width=5, height=4)
+            self.tabs.addTab(imag_canvas, "complex field (imag E)")
+            imag_canvas.plot_heatmap(complex_imag, extent, "Imaginary Part of E-field", cmap='bwr')
 
     def export_data(self, monitor_name):
         """
