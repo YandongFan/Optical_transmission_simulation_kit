@@ -1,5 +1,5 @@
 {
-    "version": "1.1",
+    "version": "1.2",
     "grid": {
         "nx": 512,
         "ny": 512,
@@ -8,19 +8,29 @@
         "wavelength": 7.799999999999999e-07
     },
     "source": {
-        "type": 2,
+        "type_idx": 4,
         "amplitude": 1.0,
-        "w0": 1.9999999999999998e-05,
-        "z_pos": 0.0
+        "z_pos": 0.0,
+        "normalize": true,
+        "equation": "exp(sqrt(-1)*m*arctan(y/x))",
+        "variables": {
+            "m": 10.0
+        }
     },
     "modulators": {
         "mod1": {
+            "type_idx": 0,
             "z": 10.0,
+            "z_val": 10000000.0,
+            "z_unit": "um",
             "phase_path": null,
             "amp_path": null
         },
         "mod2": {
-            "z": 20.0,
+            "type_idx": 0,
+            "z": 10.0,
+            "z_val": 10000000.0,
+            "z_unit": "um",
             "phase_path": null,
             "angle_path": null
         }

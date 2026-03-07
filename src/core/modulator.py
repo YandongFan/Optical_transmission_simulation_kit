@@ -122,3 +122,60 @@ class AngleModulator(Modulator):
         new_field = OpticalField(self.grid, device=device)
         new_field.set_field(E_new)
         return new_field
+
+class IdealLens(Modulator):
+    """
+    理想薄透镜 (Ideal Thin Lens)
+    """
+    def __init__(self, grid, focal_length: float):
+        super().__init__(grid)
+        self.f = focal_length
+
+    def modulate(self, field: OpticalField) -> OpticalField:
+        device = field.device
+        k = self.grid.k
+        
+        # Grid coordinates
+        X = torch.from_numpy(self.grid.X).to(device)
+        Y = torch.from_numpy(self.grid.Y).to(device)
+        
+        # Phase transformation: phi(x,y) = -k/(2f) * (x^2 + y^2)
+        phase = -k / (2 * self.f) * (X**2 + Y**2)
+        
+        # Apply phase
+        T = torch.exp(1j * phase)
+        E_new = field.E * T
+        
+        new_field = OpticalField(self.grid, device=device)
+        new_field.set_field(E_new)
+        return new_field
+
+class CylindricalLens(Modulator):
+    """
+    理想柱透镜 (Ideal Cylindrical Lens)
+    """
+    def __init__(self, grid, focal_length: float, axis: str = 'x'):
+        """
+        :param axis: 'x' (focuses in x direction, constant in y) or 'y'
+        """
+        super().__init__(grid)
+        self.f = focal_length
+        self.axis = axis.lower()
+
+    def modulate(self, field: OpticalField) -> OpticalField:
+        device = field.device
+        k = self.grid.k
+        
+        if self.axis == 'x':
+            coord = torch.from_numpy(self.grid.X).to(device)
+        else:
+            coord = torch.from_numpy(self.grid.Y).to(device)
+            
+        phase = -k / (2 * self.f) * (coord**2)
+        
+        T = torch.exp(1j * phase)
+        E_new = field.E * T
+        
+        new_field = OpticalField(self.grid, device=device)
+        new_field.set_field(E_new)
+        return new_field

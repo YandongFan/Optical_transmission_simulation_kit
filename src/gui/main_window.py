@@ -12,9 +12,9 @@ from .visualization_panel import VisualizationPanel
 
 # Import core modules
 from ..core.field import Grid, OpticalField
-from ..core.source import PlaneWave, GaussianBeam, LaguerreGaussianBeam, Source
+from ..core.source import PlaneWave, GaussianBeam, LaguerreGaussianBeam, Source, CustomSource
 from ..core.propagator import AngularSpectrumPropagator
-from ..core.modulator import SpatialModulator, AngleModulator
+from ..core.modulator import SpatialModulator, AngleModulator, IdealLens, CylindricalLens
 from ..core.monitor import Monitor
 
 class MainWindow(QMainWindow):
@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
         
     def show_about(self):
-        QMessageBox.about(self, "About", "Optical Transmission Simulation Kit\nVersion 1.1")
+        QMessageBox.about(self, "About", "Optical Transmission Simulation Kit\nVersion 1.2")
 
     def save_project(self):
         """
@@ -108,27 +108,17 @@ class MainWindow(QMainWindow):
             
             # Gather parameters
             nx, ny, dx, dy, wavelength = self.get_grid_params()
-            source_type, amp, w0, z_pos = self.get_source_params()
+            source_params = self.get_source_params()
             
             data = {
-                "version": "1.1",
+                "version": "1.2",
                 "grid": {
                     "nx": nx, "ny": ny, "dx": dx, "dy": dy, "wavelength": wavelength
                 },
-                "source": {
-                    "type": source_type, "amplitude": amp, "w0": w0, "z_pos": z_pos
-                },
+                "source": source_params,
                 "modulators": {
-                    "mod1": {
-                        "z": self.parameter_panel.sb_mod1_z.value(),
-                        "phase_path": self.parameter_panel.mod1_phase_path,
-                        "amp_path": self.parameter_panel.mod1_amp_path
-                    },
-                    "mod2": {
-                        "z": self.parameter_panel.sb_mod2_z.value(),
-                        "phase_path": self.parameter_panel.mod2_phase_path,
-                        "angle_path": self.parameter_panel.mod2_angle_path
-                    }
+                    "mod1": self.get_modulator_config('mod1'),
+                    "mod2": self.get_modulator_config('mod2')
                 },
                 "monitors": self.parameter_panel.monitors
             }
@@ -164,8 +154,6 @@ class MainWindow(QMainWindow):
                 
             # Version check (basic)
             version = data.get("version", "1.0")
-            if version not in ["1.0", "1.1"]:
-                 QMessageBox.warning(self, "Warning", f"Unknown project version: {version}. Loading may fail.")
             
             self.progress_bar.setValue(30)
             
@@ -179,39 +167,74 @@ class MainWindow(QMainWindow):
             
             # Set Source Params
             source = data.get("source", {})
-            self.parameter_panel.combo_source.setCurrentIndex(source.get("type", 0))
+            self.parameter_panel.combo_source.setCurrentIndex(source.get("type_idx", 0))
             self.parameter_panel.sb_amplitude.setValue(source.get("amplitude", 1.0))
-            self.parameter_panel.sb_w0.setValue(source.get("w0", 100e-6) * 1e6)
             self.parameter_panel.sb_z_pos.setValue(source.get("z_pos", 0) * 1e6)
+            self.parameter_panel.cb_normalize.setChecked(source.get("normalize", False))
             
+            if "w0" in source:
+                self.parameter_panel.sb_w0.setValue(source.get("w0", 100e-6) * 1e6)
+                self.parameter_panel.sb_lg_w0.setValue(source.get("w0", 100e-6) * 1e6)
+                self.parameter_panel.sb_bessel_w0.setValue(source.get("w0", 100e-6) * 1e6)
+            
+            if "p" in source: self.parameter_panel.sb_lg_p.setValue(source.get("p", 0))
+            if "l" in source: self.parameter_panel.sb_lg_l.setValue(source.get("l", 1))
+            
+            if "equation" in source: self.parameter_panel.txt_equation.setPlainText(source.get("equation", ""))
+            
+            # Variables
+            vars_dict = source.get("variables", {})
+            self.parameter_panel.table_vars.setRowCount(0)
+            for k, v in vars_dict.items():
+                self.parameter_panel.add_custom_variable()
+                row = self.parameter_panel.table_vars.rowCount() - 1
+                self.parameter_panel.table_vars.setItem(row, 0,  QTableWidgetItem(str(k)))
+                self.parameter_panel.table_vars.setItem(row, 1,  QTableWidgetItem(str(v)))
+
             self.progress_bar.setValue(50)
             
             # Set Modulator Params
-            mods = data.get("modulators", {})
+            # Note: This is simplified. Restoring full state including paths needs more work.
+            # Assuming paths are not stored in detail in get_modulator_config for now or handled separately.
+            # The current save logic stores basic config.
             
-            # Compatibility with v1.0 structure
-            if "mod1_z" in mods:
-                 # v1.0
-                 self.parameter_panel.sb_mod1_z.setValue(mods.get("mod1_z", 10))
-                 self.parameter_panel.sb_mod2_z.setValue(mods.get("mod2_z", 20))
-                 # Monitor z was single in v1.0, ignore here as we load monitors list below if v1.1
-            else:
-                 # v1.1
-                 mod1 = mods.get("mod1", {})
-                 self.parameter_panel.sb_mod1_z.setValue(mod1.get("z", 10))
-                 if mod1.get("phase_path") and os.path.exists(mod1.get("phase_path")):
-                     self.parameter_panel.load_data('phase1', mod1.get("phase_path")) # Modify load_data to accept path
-                 if mod1.get("amp_path") and os.path.exists(mod1.get("amp_path")):
-                     self.parameter_panel.load_data('amp1', mod1.get("amp_path"))
-                     
-                 mod2 = mods.get("mod2", {})
-                 self.parameter_panel.sb_mod2_z.setValue(mod2.get("z", 20))
-                 if mod2.get("phase_path") and os.path.exists(mod2.get("phase_path")):
-                     self.parameter_panel.load_data('phase2', mod2.get("phase_path"))
-                 if mod2.get("angle_path") and os.path.exists(mod2.get("angle_path")):
-                     self.parameter_panel.load_data('angle2', mod2.get("angle_path"))
+            mods = data.get("modulators", {})
+            for prefix in ['mod1', 'mod2']:
+                m = mods.get(prefix, {})
+                if m:
+                    # Restore Z
+                    sb_z = getattr(self.parameter_panel, f"sb_{prefix}_z")
+                    combo_z = getattr(self.parameter_panel, f"combo_{prefix}_z_unit")
+                    
+                    if 'z_unit' in m:
+                        combo_z.setCurrentText(m['z_unit'])
+                        sb_z.setValue(m['z_val'])
+                    else:
+                        # Fallback for old files (meters -> um)
+                        combo_z.setCurrentText("um")
+                        sb_z.setValue(m.get('z', 0) * 1e6)
+                        
+                    getattr(self.parameter_panel, f"combo_{prefix}_type").setCurrentIndex(m.get('type_idx', 0))
+                    
+                    # Restore F and D
+                    if 'f' in m:
+                        sb_f = getattr(self.parameter_panel, f"sb_{prefix}_f")
+                        combo_f = getattr(self.parameter_panel, f"combo_{prefix}_f_unit")
+                        
+                        if 'f_unit' in m:
+                            combo_f.setCurrentText(m['f_unit'])
+                            sb_f.setValue(m['f_val'])
+                        else:
+                            combo_f.setCurrentText("um")
+                            sb_f.setValue(m.get('f', 0) * 1e6)
+                            
+                    if 'D_val' in m:
+                        sb_D = getattr(self.parameter_panel, f"sb_{prefix}_D")
+                        combo_D = getattr(self.parameter_panel, f"combo_{prefix}_D_unit")
+                        combo_D.setCurrentText(m.get('D_unit', 'um'))
+                        sb_D.setValue(m['D_val'])
 
-            # Set Monitors (v1.1)
+            # Set Monitors
             monitors = data.get("monitors", [])
             self.parameter_panel.monitors = monitors
             self.parameter_panel.monitor_list.clear()
@@ -244,12 +267,78 @@ class MainWindow(QMainWindow):
         """
         从界面获取光源参数 (Get source parameters from GUI)
         """
-        source_type_idx = self.parameter_panel.combo_source.currentIndex()
-        amplitude = self.parameter_panel.sb_amplitude.value()
-        w0 = self.parameter_panel.sb_w0.value() * 1e-6 # um to m
-        z_pos = self.parameter_panel.sb_z_pos.value() * 1e-6 # um to m
-        normalize = self.parameter_panel.cb_normalize.isChecked()
-        return source_type_idx, amplitude, w0, z_pos, normalize
+        idx = self.parameter_panel.combo_source.currentIndex()
+        params = {
+            'type_idx': idx,
+            'amplitude': self.parameter_panel.sb_amplitude.value(),
+            'z_pos': self.parameter_panel.sb_z_pos.value() * 1e-6,
+            'normalize': self.parameter_panel.cb_normalize.isChecked()
+        }
+        
+        if idx == 1: # Gaussian
+            params['w0'] = self.parameter_panel.sb_w0.value() * 1e-6
+        elif idx == 2: # LG
+            params['w0'] = self.parameter_panel.sb_lg_w0.value() * 1e-6
+            params['p'] = self.parameter_panel.sb_lg_p.value()
+            params['l'] = self.parameter_panel.sb_lg_l.value()
+        elif idx == 3: # Bessel
+            params['w0'] = self.parameter_panel.sb_bessel_w0.value() * 1e-6
+        elif idx == 4: # Custom
+            params['equation'] = self.parameter_panel.txt_equation.toPlainText()
+            # Parse variables
+            vars_dict = {}
+            table = self.parameter_panel.table_vars
+            for i in range(table.rowCount()):
+                name_item = table.item(i, 0)
+                val_item = table.item(i, 1)
+                if name_item and val_item:
+                    try:
+                        vars_dict[name_item.text()] = float(val_item.text())
+                    except ValueError:
+                        pass
+            params['variables'] = vars_dict
+            
+        return params
+
+    def get_value_in_meters(self, sb, combo):
+        val = sb.value()
+        unit = combo.currentText()
+        if unit == "mm": return val * 1e-3
+        elif unit == "um": return val * 1e-6
+        return val
+
+    def get_modulator_config(self, prefix):
+        combo = getattr(self.parameter_panel, f"combo_{prefix}_type")
+        type_idx = combo.currentIndex()
+        
+        sb_z = getattr(self.parameter_panel, f"sb_{prefix}_z")
+        combo_z = getattr(self.parameter_panel, f"combo_{prefix}_z_unit")
+        z = self.get_value_in_meters(sb_z, combo_z)
+        
+        config = {'type_idx': type_idx, 'z': z, 'z_val': sb_z.value(), 'z_unit': combo_z.currentText()}
+        
+        if type_idx != 0: # Lens
+            sb_f = getattr(self.parameter_panel, f"sb_{prefix}_f")
+            combo_f = getattr(self.parameter_panel, f"combo_{prefix}_f_unit")
+            config['f'] = self.get_value_in_meters(sb_f, combo_f)
+            config['f_val'] = sb_f.value()
+            config['f_unit'] = combo_f.currentText()
+            
+            sb_D = getattr(self.parameter_panel, f"sb_{prefix}_D")
+            combo_D = getattr(self.parameter_panel, f"combo_{prefix}_D_unit")
+            config['D_val'] = sb_D.value()
+            config['D_unit'] = combo_D.currentText()
+        
+        # Paths for custom mask are stored in parameter_panel state, not retrieved here easily 
+        # unless we add them to config. For save/load they are needed.
+        if type_idx == 0:
+            config['phase_path'] = getattr(self.parameter_panel, f"{prefix}_phase_path")
+            if prefix == 'mod1':
+                config['amp_path'] = getattr(self.parameter_panel, f"{prefix}_amp_path")
+            elif prefix == 'mod2':
+                config['angle_path'] = getattr(self.parameter_panel, f"{prefix}_angle_path")
+                
+        return config
 
     def on_preview(self):
         """
@@ -264,24 +353,30 @@ class MainWindow(QMainWindow):
             self.grid = Grid(nx, ny, dx, dy, wavelength)
             
             # 2. Create Source
-            source_type_idx, amplitude, w0, z_pos, normalize = self.get_source_params()
+            params = self.get_source_params()
+            idx = params['type_idx']
+            amp = params['amplitude']
+            z_pos = params['z_pos']
             
             source = None
-            if source_type_idx == 0: # Plane Wave
-                source = PlaneWave(self.grid, amplitude=amplitude)
-            elif source_type_idx == 1: # Gaussian Beam
-                source = GaussianBeam(self.grid, amplitude=amplitude, w0=w0, z=z_pos)
-            elif source_type_idx == 2: # Laguerre-Gaussian
-                source = LaguerreGaussianBeam(self.grid, amplitude=amplitude, w0=w0, p=0, l=1) # TODO: Add p, l inputs
-            elif source_type_idx == 3: # Bessel Beam
-                 # TODO: Implement Bessel Beam or fallback
-                 source = GaussianBeam(self.grid, amplitude=amplitude, w0=w0, z=z_pos)
+            if idx == 0: # Plane Wave
+                source = PlaneWave(self.grid, amplitude=amp)
+            elif idx == 1: # Gaussian Beam
+                source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=z_pos)
+            elif idx == 2: # Laguerre-Gaussian
+                source = LaguerreGaussianBeam(self.grid, amplitude=amp, w0=params['w0'], 
+                                              p=params['p'], l=params['l'])
+            elif idx == 3: # Bessel Beam
+                 source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=z_pos)
+            elif idx == 4: # Custom
+                 source = CustomSource(self.grid, amplitude=amp, equation=params['equation'], 
+                                       variables=params['variables'])
             
             if source:
                 self.field = source.generate(device=self.device)
                 
                 # Normalize if requested
-                if normalize:
+                if params['normalize']:
                     self.field.normalize()
                 
                 # 3. Update Plots
@@ -312,23 +407,23 @@ class MainWindow(QMainWindow):
                 self.visualization_panel.clear_data() # Clear previous results
                 
                 # Check normalization setting again (in case changed but not previewed)
-                _, _, _, _, normalize = self.get_source_params()
-                if normalize:
+                params = self.get_source_params()
+                if params['normalize']:
                      self.field.normalize()
 
                 propagator = AngularSpectrumPropagator(self.grid)
                 
                 # Retrieve parameters
-                mod1_z = self.parameter_panel.sb_mod1_z.value() * 1e-3 # mm to m
-                mod2_z = self.parameter_panel.sb_mod2_z.value() * 1e-3 # mm to m
+                mod1_config = self.get_modulator_config('mod1')
+                mod2_config = self.get_modulator_config('mod2')
                 
                 # Monitors from list
                 monitors_config = self.parameter_panel.monitors
                 
                 # Build event list
                 events = []
-                events.append({'z': mod1_z, 'type': 'mod1'})
-                events.append({'z': mod2_z, 'type': 'mod2'})
+                events.append({'z': mod1_config['z'], 'type': 'mod1', 'config': mod1_config})
+                events.append({'z': mod2_config['z'], 'type': 'mod2', 'config': mod2_config})
                 
                 for m in monitors_config:
                     events.append({'z': m['z'] * 1e-3, 'type': 'monitor', 'config': m})
@@ -337,7 +432,7 @@ class MainWindow(QMainWindow):
                 events.sort(key=lambda x: x['z'])
                 
                 current_z = 0.0
-                current_field = self.field # This is reference, but propagator creates new. Be careful if inplace. Propagator is not inplace.
+                current_field = self.field 
                 
                 total_steps = len(events)
                 
@@ -351,31 +446,37 @@ class MainWindow(QMainWindow):
                     
                     type_ = event['type']
                     
-                    if type_ == 'mod1':
-                        # Apply Modulator 1
-                        mod1 = SpatialModulator(self.grid, 
-                                                amplitude_mask=self.parameter_panel.mod1_amp,
-                                                phase_mask=self.parameter_panel.mod1_phase)
-                        current_field = mod1.modulate(current_field)
+                    if type_ == 'mod1' or type_ == 'mod2':
+                        config = event['config']
+                        type_idx = config['type_idx']
                         
-                    elif type_ == 'mod2':
-                        # Apply Modulator 2
-                        # Phase
-                        mod2_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase)
-                        current_field = mod2_spatial.modulate(current_field)
-                        
-                        # Angle
-                        # TODO: Convert mod2_angle_trans data to function
-                        mod2_angle = AngleModulator(self.grid, angle_transmission_curve=None) 
-                        current_field = mod2_angle.modulate(current_field)
+                        if type_idx == 0: # Custom Mask
+                            prefix = type_
+                            # Apply Modulator 1 or 2 custom
+                            if prefix == 'mod1':
+                                mod = SpatialModulator(self.grid, 
+                                                        amplitude_mask=self.parameter_panel.mod1_amp,
+                                                        phase_mask=self.parameter_panel.mod1_phase)
+                                current_field = mod.modulate(current_field)
+                            elif prefix == 'mod2':
+                                mod_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase)
+                                current_field = mod_spatial.modulate(current_field)
+                                mod_angle = AngleModulator(self.grid, angle_transmission_curve=None) 
+                                current_field = mod_angle.modulate(current_field)
+                                
+                        elif type_idx == 1: # Ideal Lens
+                            lens = IdealLens(self.grid, focal_length=config['f'])
+                            current_field = lens.modulate(current_field)
+                        elif type_idx == 2: # Cyl X
+                            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='x')
+                            current_field = lens.modulate(current_field)
+                        elif type_idx == 3: # Cyl Y
+                            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='y')
+                            current_field = lens.modulate(current_field)
                         
                     elif type_ == 'monitor':
                         config = event['config']
                         monitor_name = config['name']
-                        
-                        # Record
-                        # monitor = Monitor(z, monitor_name)
-                        # monitor.record(current_field)
                         
                         # Visualize
                         intensity = current_field.get_intensity().cpu().numpy()

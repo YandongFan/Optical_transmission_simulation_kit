@@ -115,3 +115,67 @@ class LaguerreGaussianBeam(Source):
         field = OpticalField(self.grid, device=device)
         field.set_field(E)
         return field
+
+class CustomSource(Source):
+    """
+    自定义光源 (Custom Source)
+    """
+    def __init__(self, grid: Grid, amplitude: float = 1.0, equation: str = "1", variables: dict = None):
+        super().__init__(grid, amplitude)
+        self.equation = equation
+        self.variables = variables if variables else {}
+
+    def generate(self, device='cpu') -> OpticalField:
+        # Generate coordinates
+        x = np.linspace(-self.grid.nx/2 * self.grid.dx, self.grid.nx/2 * self.grid.dx, self.grid.nx)
+        y = np.linspace(-self.grid.ny/2 * self.grid.dy, self.grid.ny/2 * self.grid.dy, self.grid.ny)
+        X, Y = np.meshgrid(x, y)
+        
+        # Cylindrical coordinates
+        R = np.sqrt(X**2 + Y**2)
+        PHI = np.arctan2(Y, X)
+        
+        # Safe evaluation context
+        context = {
+            "np": np,
+            "sqrt": np.sqrt,
+            "exp": np.exp,
+            "sin": np.sin,
+            "cos": np.cos,
+            "tan": np.tan,
+            "pi": np.pi,
+            "abs": np.abs,
+            "arctan": np.arctan,
+            "arctan2": np.arctan2,
+            "power": np.power,
+            "x": X,
+            "y": Y,
+            "z": 0, # Assume source is at z=0 local
+            "r": R,
+            "phi": PHI,
+            "1j": 1j
+        }
+        
+        # Add custom variables
+        if self.variables:
+            context.update(self.variables)
+            
+        try:
+            # Evaluate equation
+            # Equation should return a numpy array of same shape as X
+            E_val = eval(self.equation, {"__builtins__": None}, context)
+            
+            # Ensure it's complex or float array
+            if np.isscalar(E_val):
+                E_val = np.full_like(X, E_val, dtype=np.complex128)
+            
+            E = self.amplitude * E_val
+            
+        except Exception as e:
+            print(f"Error evaluating custom source: {e}")
+            # Fallback to zero
+            E = np.zeros_like(X, dtype=np.complex128)
+            
+        field = OpticalField(self.grid, device=device)
+        field.set_field(E)
+        return field
