@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QGroupBox,
                              QListWidget, QHBoxLayout, QMessageBox, QCheckBox, QDialog,
                              QSpinBox, QLineEdit, QTableWidget, QTableWidgetItem, QTextEdit,
                              QStackedWidget, QHeaderView)
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal as Signal
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
@@ -598,20 +598,26 @@ class ParameterPanel(QWidget):
         self.settings_group = QGroupBox("监视器设置 (Settings)")
         settings_layout = QFormLayout()
         
-        self.sb_mon_z = QDoubleSpinBox()
-        self.sb_mon_z.setRange(0, 10000)
-        self.sb_mon_z.setSuffix(" mm")
-        self.sb_mon_z.valueChanged.connect(self.update_current_monitor)
+        self.sb_mon_pos = QDoubleSpinBox()
+        self.sb_mon_pos.setRange(-10000, 10000)
+        self.sb_mon_pos.setSuffix(" um")
+        self.sb_mon_pos.valueChanged.connect(self.update_current_monitor)
         
         self.combo_mon_plane = QComboBox()
-        self.combo_mon_plane.addItems(["XY Plane", "YZ Plane", "ZX Plane"])
+        self.combo_mon_plane.addItems(["XY Plane (Normal Z)", "YZ Plane (Normal X)", "XZ Plane (Normal Y)"])
         self.combo_mon_plane.currentIndexChanged.connect(self.update_current_monitor)
+        self.combo_mon_plane.currentIndexChanged.connect(self.update_monitor_ui_state)
         
         self.combo_mon_type = QComboBox()
         self.combo_mon_type.addItems(["Intensity (|E|^2)", "Complex Field (E)"])
         self.combo_mon_type.currentIndexChanged.connect(self.update_current_monitor)
         
-        settings_layout.addRow("位置 (Position):", self.sb_mon_z)
+        self.lbl_mon_pos_label = QLabel("位置 (Position):")
+        self.lbl_mon_fixed_dim = QLabel("固定维度 (Fixed Dim): Z")
+        self.lbl_mon_fixed_dim.setStyleSheet("color: gray; font-style: italic;")
+        
+        settings_layout.addRow(self.lbl_mon_pos_label, self.sb_mon_pos)
+        settings_layout.addRow("", self.lbl_mon_fixed_dim) # Indented label
         settings_layout.addRow("切面 (Plane):", self.combo_mon_plane)
         settings_layout.addRow("数据类型 (Data Type):", self.combo_mon_type)
         
@@ -709,42 +715,133 @@ class ParameterPanel(QWidget):
         if row >= 0 and row < len(self.monitors):
             monitor = self.monitors[row]
             self.settings_group.setEnabled(True)
-            self.sb_mon_z.blockSignals(True)
+            self.sb_mon_pos.blockSignals(True)
             self.combo_mon_plane.blockSignals(True)
             self.combo_mon_type.blockSignals(True)
             
-            self.sb_mon_z.setValue(monitor['z'])
+            # Use 'pos' if available, fallback to 'z'
+            pos = monitor.get('pos', monitor.get('z', 0.0))
+            self.sb_mon_pos.setValue(pos)
             self.combo_mon_plane.setCurrentIndex(monitor['plane'])
             self.combo_mon_type.setCurrentIndex(monitor['type'])
             
-            self.sb_mon_z.blockSignals(False)
+            self.sb_mon_pos.blockSignals(False)
             self.combo_mon_plane.blockSignals(False)
             self.combo_mon_type.blockSignals(False)
+            
+            self.update_monitor_ui_state()
         else:
             self.settings_group.setEnabled(False)
+
+    def update_monitor_ui_state(self):
+        idx = self.combo_mon_plane.currentIndex()
+        
+        # Grid bounds check
+        nx = self.sb_nx.value()
+        ny = self.sb_ny.value()
+        dx = self.sb_dx.value() # um
+        dy = self.sb_dy.value() # um
+        
+        x_max = (nx * dx) / 2
+        y_max = (ny * dy) / 2
+        
+        if idx == 0: # XY Plane (Normal Z)
+            self.lbl_mon_pos_label.setText("设置 Z 轴位置 (Set Z Position):")
+            self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Z-Axis (Propagation)")
+            self.sb_mon_pos.setSuffix(" um") # Or mm? User asked for um
+            # Z range is technically infinite, but usually positive
+            self.sb_mon_pos.setRange(-100000, 100000)
+            self.sb_mon_pos.setStyleSheet("") # Clear warning
+            
+        elif idx == 1: # YZ Plane (Normal X)
+            self.lbl_mon_pos_label.setText("设置 X 轴位置 (Set X Position):")
+            self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): X-Axis")
+            self.sb_mon_pos.setSuffix(" um")
+            # X range validation
+            self.sb_mon_pos.setRange(-x_max * 1.5, x_max * 1.5) # Allow slight over, warn if out
+            
+        elif idx == 2: # XZ Plane (Normal Y)
+            self.lbl_mon_pos_label.setText("设置 Y 轴位置 (Set Y Position):")
+            self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Y-Axis")
+            self.sb_mon_pos.setSuffix(" um")
+            # Y range validation
+            self.sb_mon_pos.setRange(-y_max * 1.5, y_max * 1.5)
+
+        # Validate current value
+        self.validate_monitor_pos()
+
+    def validate_monitor_pos(self):
+        idx = self.combo_mon_plane.currentIndex()
+        val = self.sb_mon_pos.value()
+        
+        nx = self.sb_nx.value()
+        ny = self.sb_ny.value()
+        dx = self.sb_dx.value() # um
+        dy = self.sb_dy.value() # um
+        
+        x_max = (nx * dx) / 2
+        y_max = (ny * dy) / 2
+        
+        is_valid = True
+        msg = ""
+        
+        if idx == 1: # X
+            if abs(val) > x_max:
+                is_valid = False
+                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-x_max:.1f}, {x_max:.1f}])"
+        elif idx == 2: # Y
+            if abs(val) > y_max:
+                is_valid = False
+                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-y_max:.1f}, {y_max:.1f}])"
+                
+        if not is_valid:
+            self.sb_mon_pos.setStyleSheet("border: 1px solid red; background-color: #FFDDDD;")
+            self.lbl_mon_fixed_dim.setText(f"{self.lbl_mon_fixed_dim.text()} - {msg}")
+            self.lbl_mon_fixed_dim.setStyleSheet("color: red; font-weight: bold;")
+        else:
+            self.sb_mon_pos.setStyleSheet("")
+            # Reset label color (need to re-set text without warning)
+            self.update_monitor_ui_state_text_only()
+
+    def update_monitor_ui_state_text_only(self):
+        # Helper to reset label text without full re-calc
+        idx = self.combo_mon_plane.currentIndex()
+        if idx == 0: self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Z-Axis (Propagation)")
+        elif idx == 1: self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): X-Axis")
+        elif idx == 2: self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Y-Axis")
+        self.lbl_mon_fixed_dim.setStyleSheet("color: gray; font-style: italic;")
 
     def update_current_monitor(self):
         row = self.monitor_list.currentRow()
         if row >= 0:
             monitor = self.monitors[row]
-            new_z = self.sb_mon_z.value()
+            new_pos = self.sb_mon_pos.value()
             new_plane = self.combo_mon_plane.currentIndex()
             
-            # Check conflict if z or plane changed
+            # Check conflict if pos or plane changed
             temp_mon = monitor.copy()
-            temp_mon['z'] = new_z
+            # Normalize pos key
+            temp_mon['pos'] = new_pos
+            temp_mon['z'] = new_pos # Keep legacy z for compatibility check, though conflict logic needs update
             temp_mon['plane'] = new_plane
+            
+            # Conflict logic needs to know what 'z' means now.
+            # Assuming conflict logic checks (pos, plane) uniqueness.
             
             if self.detect_conflict(temp_mon, exclude_index=row):
                  # Revert UI
-                 self.sb_mon_z.blockSignals(True)
-                 self.sb_mon_z.setValue(monitor['z'])
-                 self.sb_mon_z.blockSignals(False)
+                 self.sb_mon_pos.blockSignals(True)
+                 self.sb_mon_pos.setValue(monitor.get('pos', monitor.get('z', 0)))
+                 self.sb_mon_pos.blockSignals(False)
                  return
-                 
-            monitor['z'] = new_z
+            
+            # Update monitor
+            monitor['pos'] = new_pos
+            monitor['z'] = new_pos # For backward compat, though misleading for X/Y planes
             monitor['plane'] = new_plane
             monitor['type'] = self.combo_mon_type.currentIndex()
+            
+            self.validate_monitor_pos()
 
     def load_data(self, target, path=None):
         """
