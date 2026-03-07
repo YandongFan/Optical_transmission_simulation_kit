@@ -181,6 +181,7 @@ class MainWindow(QMainWindow):
             if "l" in source: self.parameter_panel.sb_lg_l.setValue(source.get("l", 1))
             
             if "equation" in source: self.parameter_panel.txt_equation.setPlainText(source.get("equation", ""))
+            if "coord_sys_idx" in source: self.parameter_panel.combo_coord_sys.setCurrentIndex(source.get("coord_sys_idx", 0))
             
             # Variables
             vars_dict = source.get("variables", {})
@@ -285,6 +286,7 @@ class MainWindow(QMainWindow):
             params['w0'] = self.parameter_panel.sb_bessel_w0.value() * 1e-6
         elif idx == 4: # Custom
             params['equation'] = self.parameter_panel.txt_equation.toPlainText()
+            params['coord_sys_idx'] = self.parameter_panel.combo_coord_sys.currentIndex()
             # Parse variables
             vars_dict = {}
             table = self.parameter_panel.table_vars
@@ -390,6 +392,12 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}")
+            QMessageBox.critical(self, "自定义光源无法预览 (Custom Source Preview Failed)", 
+                               f"失败原因 (Reason): {str(e)}\n\n"
+                               "建议修正方案 (Suggestions):\n"
+                               "- 检查方程语法 (Check syntax)\n"
+                               "- 避免除以零 (Avoid division by zero, use y/(x+1e-10))\n"
+                               "- 检查变量名是否定义 (Check variable names)")
             print(e)
 
     def on_run(self):

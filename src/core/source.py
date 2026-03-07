@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from .field import Grid, OpticalField
-from scipy.special import genlaguerre
+from scipy.special import genlaguerre, jv
 
 class Source:
     """
@@ -25,12 +25,10 @@ class PlaneWave(Source):
         self.ky = ky
         
     def generate(self, device='cpu') -> OpticalField:
-        # Generate meshgrid for spatial coordinates
         x = np.linspace(-self.grid.nx/2 * self.grid.dx, self.grid.nx/2 * self.grid.dx, self.grid.nx)
         y = np.linspace(-self.grid.ny/2 * self.grid.dy, self.grid.ny/2 * self.grid.dy, self.grid.ny)
         X, Y = np.meshgrid(x, y)
         
-        # Calculate field E(x, y) = A * exp(i(kx*x + ky*y))
         E = self.amplitude * np.exp(1j * (self.kx * X + self.ky * Y))
         
         field = OpticalField(self.grid, device=device)
@@ -42,17 +40,13 @@ class GaussianBeam(Source):
     高斯光束 (Gaussian Beam)
     """
     def __init__(self, grid: Grid, amplitude: float = 1.0, w0: float = 1.0e-3, z: float = 0.0):
-        """
-        :param w0: 腰斑半径 (Waist radius)
-        :param z: 当前位置相对于腰斑的距离 (Distance from waist)
-        """
         super().__init__(grid, amplitude)
         self.w0 = w0
         self.z = z
         
     def generate(self, device='cpu') -> OpticalField:
         k = 2 * np.pi / self.grid.wavelength
-        z_R = np.pi * self.w0**2 / self.grid.wavelength # Rayleigh range
+        z_R = np.pi * self.w0**2 / self.grid.wavelength 
         
         if self.z == 0:
             w_z = self.w0
@@ -67,10 +61,6 @@ class GaussianBeam(Source):
         y = np.linspace(-self.grid.ny/2 * self.grid.dy, self.grid.ny/2 * self.grid.dy, self.grid.ny)
         X, Y = np.meshgrid(x, y)
         r2 = X**2 + Y**2
-        
-        # Gaussian beam formula
-        # E(r, z) = A * (w0/w(z)) * exp(-r^2/w(z)^2) * exp(-i(kz + k*r^2/(2R(z)) - psi(z)))
-        # Here we ignore the exp(-ikz) term as it's a global phase factor
         
         if R_z == np.inf:
             phase_curvature = 0
@@ -91,11 +81,10 @@ class LaguerreGaussianBeam(Source):
     def __init__(self, grid: Grid, amplitude: float = 1.0, w0: float = 1.0e-3, p: int = 0, l: int = 0):
         super().__init__(grid, amplitude)
         self.w0 = w0
-        self.p = p # Radial index
-        self.l = l # Azimuthal index (topological charge)
+        self.p = p 
+        self.l = l 
         
     def generate(self, device='cpu') -> OpticalField:
-        # Generate meshgrid for spatial coordinates
         x = np.linspace(-self.grid.nx/2 * self.grid.dx, self.grid.nx/2 * self.grid.dx, self.grid.nx)
         y = np.linspace(-self.grid.ny/2 * self.grid.dy, self.grid.ny/2 * self.grid.dy, self.grid.ny)
         X, Y = np.meshgrid(x, y)
@@ -103,8 +92,6 @@ class LaguerreGaussianBeam(Source):
         r = np.sqrt(X**2 + Y**2)
         phi = np.arctan2(Y, X)
         
-        # Simplified for z=0 (at waist)
-        # Use physical waist w0 directly, independent of grid
         term1 = (r * np.sqrt(2) / self.w0) ** np.abs(self.l)
         term2 = np.exp(-r**2 / self.w0**2)
         term3 = genlaguerre(self.p, np.abs(self.l))(2 * r**2 / self.w0**2)
@@ -138,7 +125,7 @@ class CustomSource(Source):
         # Safe evaluation context
         context = {
             "np": np,
-            "sqrt": np.sqrt,
+            "sqrt": np.lib.scimath.sqrt, # Support complex sqrt
             "exp": np.exp,
             "sin": np.sin,
             "cos": np.cos,
@@ -148,12 +135,19 @@ class CustomSource(Source):
             "arctan": np.arctan,
             "arctan2": np.arctan2,
             "power": np.power,
+            "real": np.real,
+            "imag": np.imag,
+            "conj": np.conj,
+            "angle": np.angle,
+            "besselj": jv, # Bessel function of first kind
             "x": X,
             "y": Y,
             "z": 0, # Assume source is at z=0 local
             "r": R,
             "phi": PHI,
-            "1j": 1j
+            "1j": 1j,
+            "i": 1j,
+            "j": 1j
         }
         
         # Add custom variables
@@ -162,8 +156,15 @@ class CustomSource(Source):
             
         try:
             # Evaluate equation
-            # Equation should return a numpy array of same shape as X
-            E_val = eval(self.equation, {"__builtins__": None}, context)
+            # Use empty dict for locals/globals to sandbox slightly, but we pass context as locals
+            # Note: __builtins__ must be handled carefully.
+            
+            with np.errstate(divide='ignore', invalid='ignore'):
+                E_val = eval(self.equation, {"__builtins__": {}}, context)
+            
+            # Handle NaN/Inf from division by zero
+            if isinstance(E_val, np.ndarray):
+                E_val = np.nan_to_num(E_val, nan=0.0, posinf=0.0, neginf=0.0)
             
             # Ensure it's complex or float array
             if np.isscalar(E_val):
@@ -172,9 +173,12 @@ class CustomSource(Source):
             E = self.amplitude * E_val
             
         except Exception as e:
-            print(f"Error evaluating custom source: {e}")
-            # Fallback to zero
-            E = np.zeros_like(X, dtype=np.complex128)
+            # Propagate error with detail
+            # Check for common user errors
+            msg = str(e)
+            if "NoneType" in msg and "subscriptable" in msg:
+                msg += " (Hint: Check if you are using a function that requires a list or array but got None, or if __builtins__ access is required by some library)"
+            raise ValueError(f"Custom source evaluation failed: {msg}")
             
         field = OpticalField(self.grid, device=device)
         field.set_field(E)

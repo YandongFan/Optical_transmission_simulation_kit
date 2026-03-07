@@ -274,6 +274,16 @@ class ParameterPanel(QWidget):
         self.page_custom = QWidget()
         pc_layout = QVBoxLayout(self.page_custom)
         
+        # Coordinate System Selection
+        coord_group = QGroupBox("坐标系 (Coordinate System)")
+        coord_layout = QHBoxLayout()
+        self.combo_coord_sys = QComboBox()
+        self.combo_coord_sys.addItems(["笛卡尔坐标系 (Cartesian: x, y, z)", "柱坐标系 (Cylindrical: r, phi, z)"])
+        self.combo_coord_sys.currentIndexChanged.connect(self.update_custom_help)
+        coord_layout.addWidget(self.combo_coord_sys)
+        coord_group.setLayout(coord_layout)
+        pc_layout.addWidget(coord_group)
+        
         # Variables Table
         pc_layout.addWidget(QLabel("变量定义 (Variables):"))
         self.table_vars = QTableWidget(0, 2)
@@ -291,9 +301,10 @@ class ParameterPanel(QWidget):
         pc_layout.addLayout(h_layout)
         
         # Equation Editor
-        pc_layout.addWidget(QLabel("方程 (Equation): e.g. exp(-(x**2+y**2)/100**2)"))
+        self.lbl_equation_help = QLabel("方程 (Equation): e.g. exp(-(x**2+y**2)/100**2)")
+        pc_layout.addWidget(self.lbl_equation_help)
         self.txt_equation = QTextEdit()
-        self.txt_equation.setPlaceholderText("Enter numpy expression using x, y, r, phi, z...")
+        self.txt_equation.setPlaceholderText("Enter numpy expression...")
         self.txt_equation.setMaximumHeight(100)
         pc_layout.addWidget(self.txt_equation)
         
@@ -306,6 +317,15 @@ class ParameterPanel(QWidget):
         
         layout.addStretch()
         return tab
+
+    def update_custom_help(self):
+        idx = self.combo_coord_sys.currentIndex()
+        if idx == 0: # Cartesian
+            self.lbl_equation_help.setText("方程 (Equation): e.g. exp(-(x**2+y**2)/w0**2)")
+            self.txt_equation.setPlaceholderText("Available: x, y, r, phi, z, np, sqrt, exp...")
+        else: # Cylindrical
+            self.lbl_equation_help.setText("方程 (Equation): e.g. exp(-r**2/w0**2) * exp(1j*m*phi)")
+            self.txt_equation.setPlaceholderText("Available: r, phi, z, np, sqrt, exp... (phi in [-pi, pi])")
 
     def update_source_ui(self, index):
         self.source_stack.setCurrentIndex(index)
@@ -320,6 +340,9 @@ class ParameterPanel(QWidget):
         ]
         if 0 <= index < len(eqs):
             self.eq_display.update_equation(eqs[index])
+            
+        if index == 4:
+            self.update_custom_help()
 
     def add_custom_variable(self):
         row = self.table_vars.rowCount()

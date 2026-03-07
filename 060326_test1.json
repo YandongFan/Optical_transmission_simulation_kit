@@ -8,28 +8,27 @@
         "wavelength": 7.799999999999999e-07
     },
     "source": {
-        "type_idx": 4,
+        "type_idx": 0,
         "amplitude": 1.0,
         "z_pos": 0.0,
-        "normalize": true,
-        "equation": "exp(sqrt(-1)*m*arctan(y/x))",
-        "variables": {
-            "m": 10.0
-        }
+        "normalize": true
     },
     "modulators": {
         "mod1": {
-            "type_idx": 0,
-            "z": 10.0,
-            "z_val": 10000000.0,
+            "type_idx": 1,
+            "z": 9.999999999999999e-05,
+            "z_val": 100.0,
             "z_unit": "um",
-            "phase_path": null,
-            "amp_path": null
+            "f": 9.999999999999999e-05,
+            "f_val": 100.0,
+            "f_unit": "um",
+            "D_val": 50.0,
+            "D_unit": "um"
         },
         "mod2": {
             "type_idx": 0,
-            "z": 10.0,
-            "z_val": 10000000.0,
+            "z": 0.02,
+            "z_val": 20000.0,
             "z_unit": "um",
             "phase_path": null,
             "angle_path": null
@@ -38,55 +37,67 @@
     "monitors": [
         {
             "name": "Array_1",
-            "z": 10.0,
+            "z": 100.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_2",
-            "z": 20.0,
+            "z": 110.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_3",
-            "z": 30.0,
+            "z": 120.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_4",
-            "z": 40.0,
+            "z": 130.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_5",
-            "z": 50.0,
+            "z": 140.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_6",
-            "z": 60.0,
+            "z": 150.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_7",
-            "z": 70.0,
+            "z": 160.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_8",
-            "z": 80.0,
+            "z": 170.0,
             "plane": 0,
             "type": 0
         },
         {
             "name": "Array_9",
-            "z": 90.0,
+            "z": 180.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_10",
+            "z": 190.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Monitor 11",
+            "z": 200.0,
             "plane": 0,
             "type": 0
         }
