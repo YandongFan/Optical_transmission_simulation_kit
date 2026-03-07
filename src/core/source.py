@@ -95,6 +95,7 @@ class LaguerreGaussianBeam(Source):
         self.l = l # Azimuthal index (topological charge)
         
     def generate(self, device='cpu') -> OpticalField:
+        # Generate meshgrid for spatial coordinates
         x = np.linspace(-self.grid.nx/2 * self.grid.dx, self.grid.nx/2 * self.grid.dx, self.grid.nx)
         y = np.linspace(-self.grid.ny/2 * self.grid.dy, self.grid.ny/2 * self.grid.dy, self.grid.ny)
         X, Y = np.meshgrid(x, y)
@@ -103,6 +104,7 @@ class LaguerreGaussianBeam(Source):
         phi = np.arctan2(Y, X)
         
         # Simplified for z=0 (at waist)
+        # Use physical waist w0 directly, independent of grid
         term1 = (r * np.sqrt(2) / self.w0) ** np.abs(self.l)
         term2 = np.exp(-r**2 / self.w0**2)
         term3 = genlaguerre(self.p, np.abs(self.l))(2 * r**2 / self.w0**2)

@@ -65,6 +65,14 @@ class OpticalField:
         else:
             raise ValueError("Unsupported data type")
 
+    def normalize(self):
+        """
+        归一化电场，使最大幅值为1 (Normalize field so max amplitude is 1)
+        """
+        max_val = torch.max(torch.abs(self.E))
+        if max_val > 0:
+            self.E = self.E / max_val
+
     def get_intensity(self):
         """
         获取光强分布 (Get intensity distribution) |E|^2

@@ -1,0 +1,84 @@
+{
+    "version": "1.1",
+    "grid": {
+        "nx": 512,
+        "ny": 512,
+        "dx": 2e-07,
+        "dy": 2e-07,
+        "wavelength": 7.799999999999999e-07
+    },
+    "source": {
+        "type": 2,
+        "amplitude": 1.0,
+        "w0": 1.9999999999999998e-05,
+        "z_pos": 0.0
+    },
+    "modulators": {
+        "mod1": {
+            "z": 10.0,
+            "phase_path": null,
+            "amp_path": null
+        },
+        "mod2": {
+            "z": 20.0,
+            "phase_path": null,
+            "angle_path": null
+        }
+    },
+    "monitors": [
+        {
+            "name": "Array_1",
+            "z": 10.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_2",
+            "z": 20.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_3",
+            "z": 30.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_4",
+            "z": 40.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_5",
+            "z": 50.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_6",
+            "z": 60.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_7",
+            "z": 70.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_8",
+            "z": 80.0,
+            "plane": 0,
+            "type": 0
+        },
+        {
+            "name": "Array_9",
+            "z": 90.0,
+            "plane": 0,
+            "type": 0
+        }
+    ]
+}

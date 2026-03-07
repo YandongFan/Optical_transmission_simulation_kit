@@ -1,7 +1,9 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy)
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy, QComboBox, QLabel, QHBoxLayout, QMessageBox, QFileDialog)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
+import h5py
+import pandas as pd
 
 class VisualizationPanel(QWidget):
     """
@@ -10,6 +12,17 @@ class VisualizationPanel(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        
+        # Monitor Selection
+        mon_layout = QHBoxLayout()
+        mon_layout.addWidget(QLabel("选择监视器 (Select Monitor):"))
+        self.combo_monitors = QComboBox()
+        self.combo_monitors.currentIndexChanged.connect(self.on_monitor_changed)
+        mon_layout.addWidget(self.combo_monitors)
+        layout.addLayout(mon_layout)
+        
+        # Data storage
+        self.monitor_data = {} # {monitor_name: {'field': ..., 'intensity': ..., 'phase': ..., 'x': ..., 'y': ...}}
         
         # Tabs for different views (e.g., Intensity, Phase, 3D)
         self.tabs = QTabWidget()
@@ -26,6 +39,47 @@ class VisualizationPanel(QWidget):
         # 3. Cross-section Plot (Optional)
         self.cross_section_canvas = PlotCanvas(self, width=5, height=4)
         self.tabs.addTab(self.cross_section_canvas, "截面分布 (Cross Section)")
+
+    def clear_data(self):
+        """
+        清空数据 (Clear all data)
+        """
+        self.monitor_data = {}
+        self.combo_monitors.clear()
+        self.intensity_canvas.clear()
+        self.phase_canvas.clear()
+        self.cross_section_canvas.clear()
+
+    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y):
+        """
+        添加监视器结果 (Add monitor result)
+        """
+        self.monitor_data[name] = {
+            'field': field_data,
+            'intensity': intensity_data,
+            'phase': phase_data,
+            'x': x,
+            'y': y
+        }
+        
+        # Add to combo box if not exists
+        if self.combo_monitors.findText(name) == -1:
+            self.combo_monitors.addItem(name)
+            
+        # If currently selected or first item, update view
+        if self.combo_monitors.currentText() == name:
+            self.on_monitor_changed(self.combo_monitors.currentIndex())
+        elif self.combo_monitors.count() == 1:
+             self.on_monitor_changed(0)
+
+    def on_monitor_changed(self, index):
+        """
+        切换监视器 (Switch monitor view)
+        """
+        name = self.combo_monitors.currentText()
+        if name in self.monitor_data:
+            data = self.monitor_data[name]
+            self.update_plots(data['field'], data['intensity'], data['phase'], data['x'], data['y'])
 
     def update_plots(self, field_data, intensity_data, phase_data, x, y):
         """
@@ -53,6 +107,51 @@ class VisualizationPanel(QWidget):
             
         self.cross_section_canvas.plot_line(x_line, intensity_data[mid_row, :], 
                                           f"Cross Section (y={y.mean():.2f} um)", "x (um)", "Intensity")
+
+    def export_data(self, monitor_name):
+        """
+        导出指定监视器的数据 (Export specific monitor data)
+        """
+        if monitor_name not in self.monitor_data:
+            QMessageBox.warning(self, "Warning", f"No data available for monitor: {monitor_name}")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(self, "Export Data", f"{monitor_name}.h5", "HDF5 Files (*.h5);;CSV Files (*.csv)")
+        if not filename:
+            return
+            
+        data = self.monitor_data[monitor_name]
+        try:
+            if filename.endswith('.h5'):
+                with h5py.File(filename, 'w') as f:
+                    grp = f.create_group(monitor_name)
+                    grp.create_dataset('field_real', data=np.real(data['field']))
+                    grp.create_dataset('field_imag', data=np.imag(data['field']))
+                    grp.create_dataset('intensity', data=data['intensity'])
+                    grp.create_dataset('x', data=data['x'])
+                    grp.create_dataset('y', data=data['y'])
+            elif filename.endswith('.csv'):
+                # Flatten for CSV - careful with large arrays
+                x_flat = data['x'].flatten()
+                y_flat = data['y'].flatten()
+                int_flat = data['intensity'].flatten()
+                
+                # If sizes match (meshgrid)
+                if len(x_flat) == len(int_flat):
+                    df = pd.DataFrame({
+                        'x': x_flat,
+                        'y': y_flat,
+                        'intensity': int_flat
+                    })
+                    df.to_csv(filename, index=False)
+                else:
+                     # Handle 1D coordinates vs 2D data
+                     # Create meshgrid if needed or export differently
+                     pass
+            
+            QMessageBox.information(self, "Success", f"Data exported to {filename}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
 
 class PlotCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
@@ -82,4 +181,8 @@ class PlotCanvas(FigureCanvas):
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.grid(True)
+        self.draw()
+        
+    def clear(self):
+        self.fig.clf()
         self.draw()
