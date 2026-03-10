@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QGroupBox,
                              QListWidget, QHBoxLayout, QMessageBox, QCheckBox, QDialog,
                              QSpinBox, QLineEdit, QTableWidget, QTableWidgetItem, QTextEdit,
                              QStackedWidget, QHeaderView)
+from PyQt6.QtGui import QAction, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, pyqtSignal as Signal
 import numpy as np
 import pandas as pd
@@ -42,21 +43,43 @@ class MonitorArrayDialog(QDialog):
         self.sb_count.setRange(1, 1000)
         self.sb_count.setValue(10)
         
-        self.sb_start = QDoubleSpinBox()
-        self.sb_start.setRange(0, 10000)
-        self.sb_start.setValue(10.0)
-        self.sb_start.setSuffix(" mm")
-        
-        self.sb_spacing = QDoubleSpinBox()
-        self.sb_spacing.setRange(0.001, 1000)
-        self.sb_spacing.setValue(1.0)
-        self.sb_spacing.setSuffix(" mm")
+        # Helper for unit spinbox in dialog
+        def create_dialog_unit_spinbox(val, unit):
+            w = QWidget()
+            l = QHBoxLayout(w)
+            l.setContentsMargins(0,0,0,0)
+            sb = QDoubleSpinBox()
+            sb.setRange(0.0, 100000.0)
+            sb.setValue(val)
+            cmb = QComboBox()
+            cmb.addItems(["mm", "um"])
+            cmb.setCurrentText(unit)
+            l.addWidget(sb)
+            l.addWidget(cmb)
+            
+            # Link for conversion
+            cmb.setProperty("last_unit", unit)
+            def on_change(new_u):
+                old_u = cmb.property("last_unit")
+                v = sb.value()
+                # to um
+                v_um = v * (1000 if old_u == "mm" else 1)
+                # to new
+                v_new = v_um / (1000 if new_u == "mm" else 1)
+                sb.setValue(v_new)
+                cmb.setProperty("last_unit", new_u)
+            cmb.currentTextChanged.connect(on_change)
+            
+            return w, sb, cmb
+
+        self.w_start, self.sb_start, self.combo_start_unit = create_dialog_unit_spinbox(10.0, "mm")
+        self.w_spacing, self.sb_spacing, self.combo_spacing_unit = create_dialog_unit_spinbox(1.0, "mm")
         
         self.le_prefix = QLineEdit("Array_")
         
         layout.addRow("监视器数量 (Count):", self.sb_count)
-        layout.addRow("起始位置 (Start Z):", self.sb_start)
-        layout.addRow("间距 (Spacing):", self.sb_spacing)
+        layout.addRow("起始位置 (Start Z):", self.w_start)
+        layout.addRow("间距 (Spacing):", self.w_spacing)
         layout.addRow("名称前缀 (Prefix):", self.le_prefix)
         
         btns = QHBoxLayout()
@@ -69,7 +92,10 @@ class MonitorArrayDialog(QDialog):
         layout.addRow(btns)
 
     def get_values(self):
-        return self.sb_count.value(), self.sb_start.value(), self.sb_spacing.value(), self.le_prefix.text()
+        return (self.sb_count.value(), 
+                self.sb_start.value(), self.combo_start_unit.currentText(),
+                self.sb_spacing.value(), self.combo_spacing_unit.currentText(),
+                self.le_prefix.text())
 
 class ParameterPanel(QWidget):
     """
@@ -572,7 +598,12 @@ class ParameterPanel(QWidget):
         manage_layout = QHBoxLayout()
         
         self.monitor_list = QListWidget()
+        self.monitor_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.monitor_list.currentRowChanged.connect(self.load_monitor_settings)
+        
+        # Keyboard shortcut for Select All
+        self.shortcut_select_all = QShortcut(QKeySequence("Ctrl+A"), self.monitor_list)
+        self.shortcut_select_all.activated.connect(self.monitor_list.selectAll)
         
         btn_layout = QVBoxLayout()
         self.btn_add_monitor = QPushButton("添加监视器 (Add)")
@@ -598,10 +629,11 @@ class ParameterPanel(QWidget):
         self.settings_group = QGroupBox("监视器设置 (Settings)")
         settings_layout = QFormLayout()
         
-        self.sb_mon_pos = QDoubleSpinBox()
-        self.sb_mon_pos.setRange(-10000, 10000)
-        self.sb_mon_pos.setSuffix(" um")
+        # Position with unit
+        self.w_mon_pos, self.sb_mon_pos, self.combo_mon_pos_unit = self.create_unit_spinbox(0.0, "mm")
+        self.sb_mon_pos.setRange(-100000, 100000)
         self.sb_mon_pos.valueChanged.connect(self.update_current_monitor)
+        self.combo_mon_pos_unit.currentTextChanged.connect(self.update_current_monitor)
         
         self.combo_mon_plane = QComboBox()
         self.combo_mon_plane.addItems(["XY Plane (Normal Z)", "YZ Plane (Normal X)", "XZ Plane (Normal Y)"])
@@ -658,7 +690,7 @@ class ParameterPanel(QWidget):
         self.sb_range2_min.valueChanged.connect(self.update_current_monitor)
         self.sb_range2_max.valueChanged.connect(self.update_current_monitor)
         
-        settings_layout.addRow(self.lbl_mon_pos_label, self.sb_mon_pos)
+        settings_layout.addRow(self.lbl_mon_pos_label, self.w_mon_pos)
         settings_layout.addRow("", self.lbl_mon_fixed_dim) # Indented label
         settings_layout.addRow("切面 (Plane):", self.combo_mon_plane)
         settings_layout.addRow("数据类型 (Data Type):", self.combo_mon_type)
@@ -679,7 +711,9 @@ class ParameterPanel(QWidget):
         name = f"Monitor {len(self.monitors) + 1}"
         monitor = {
             'name': name,
-            'z': 0.0,
+            'z': 0.0, # Legacy
+            'pos': 0.0,
+            'pos_unit': 'mm',
             'plane': 0,
             'type': 0
         }
@@ -695,29 +729,77 @@ class ParameterPanel(QWidget):
         """
         冲突检测 (Conflict Detection)
         """
+        # Convert monitor pos to um for comparison
+        mon_unit = monitor.get('pos_unit', 'um')
+        mon_pos = monitor.get('pos', monitor.get('z', 0))
+        mon_pos_um = mon_pos * (1000 if mon_unit == 'mm' else 1)
+        
         for i, m in enumerate(self.monitors):
             if i == exclude_index:
                 continue
-            if abs(m['z'] - monitor['z']) < 1e-6 and m['plane'] == monitor['plane']:
+            
+            m_unit = m.get('pos_unit', 'um')
+            m_pos = m.get('pos', m.get('z', 0))
+            m_pos_um = m_pos * (1000 if m_unit == 'mm' else 1)
+            
+            if abs(m_pos_um - mon_pos_um) < 1e-3 and m['plane'] == monitor['plane']: # 1e-3 um tolerance
                 return True
         return False
 
     def delete_monitor(self):
-        row = self.monitor_list.currentRow()
-        if row >= 0:
-            self.monitor_list.takeItem(row)
-            del self.monitors[row]
+        selected_items = self.monitor_list.selectedItems()
+        if not selected_items:
+            return
+            
+        count = len(selected_items)
+        msg = f"确定要删除选中的 {count} 个监视器吗？\n(Are you sure you want to delete {count} selected monitors?)"
+        reply = QMessageBox.question(self, "Delete Monitors", msg, 
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Get rows and sort descending to avoid index shift issues
+            rows = []
+            for item in selected_items:
+                rows.append(self.monitor_list.row(item))
+            
+            rows.sort(reverse=True)
+            
+            for row in rows:
+                self.monitor_list.takeItem(row)
+                del self.monitors[row]
+            
             if not self.monitors:
                 self.settings_group.setEnabled(False)
+            
+            self.window().statusBar().showMessage(f"已删除 {count} 个监视器 (Deleted {count} monitors).")
 
     def add_monitor_array(self):
         dialog = MonitorArrayDialog(self)
         if dialog.exec():
-            count, start, spacing, prefix = dialog.get_values()
+            count, start, start_unit, spacing, spacing_unit, prefix = dialog.get_values()
+            
+            # Convert to um for calculation
+            start_um = start * (1000 if start_unit == 'mm' else 1)
+            spacing_um = spacing * (1000 if spacing_unit == 'mm' else 1)
+            
             for i in range(count):
-                z = start + i * spacing
+                z_um = start_um + i * spacing_um
                 name = f"{prefix}{len(self.monitors) + 1}"
-                monitor = {'name': name, 'z': z, 'plane': 0, 'type': 0}
+                
+                # Store in mm if that was preferred start unit, or um?
+                # Let's default to mm if start was mm, else um
+                unit = start_unit
+                pos = z_um / 1000 if unit == 'mm' else z_um
+                
+                monitor = {
+                    'name': name, 
+                    'pos': pos, 
+                    'pos_unit': unit,
+                    'z': pos, # Legacy
+                    'plane': 0, 
+                    'type': 0
+                }
+                
                 if not self.detect_conflict(monitor):
                     self.monitors.append(monitor)
                     self.monitor_list.addItem(name)
@@ -759,6 +841,7 @@ class ParameterPanel(QWidget):
             monitor = self.monitors[row]
             self.settings_group.setEnabled(True)
             self.sb_mon_pos.blockSignals(True)
+            self.combo_mon_pos_unit.blockSignals(True)
             self.combo_mon_plane.blockSignals(True)
             self.combo_mon_type.blockSignals(True)
             
@@ -767,9 +850,24 @@ class ParameterPanel(QWidget):
             self.sb_range2_min.blockSignals(True)
             self.sb_range2_max.blockSignals(True)
             
-            # Use 'pos' if available, fallback to 'z'
+            # Load Unit first to set scaling correct in spinbox helper?
+            # No, create_unit_spinbox helper reacts to unit change by scaling value.
+            # So if I set unit first, it might scale the OLD value.
+            # I should set unit (without signal) then set value.
+            
+            unit = monitor.get('pos_unit', 'um') # Default um if missing (legacy)
+            # If legacy 'z' is present but no 'pos', assume 'z' is in um.
             pos = monitor.get('pos', monitor.get('z', 0.0))
+            
+            # Ensure consistency: if we load legacy (um), but want to display as 'mm', we must convert.
+            # But here we just load what is stored.
+            
+            self.combo_mon_pos_unit.setCurrentText(unit)
+            # Important: sync the "last_unit" property so future changes calculate correctly
+            self.combo_mon_pos_unit.setProperty("last_unit", unit)
+            
             self.sb_mon_pos.setValue(pos)
+            
             self.combo_mon_plane.setCurrentIndex(monitor['plane'])
             self.combo_mon_type.setCurrentIndex(monitor['type'])
             
@@ -780,6 +878,7 @@ class ParameterPanel(QWidget):
             self.sb_range2_max.setValue(monitor.get('range2_max', 1000.0))
             
             self.sb_mon_pos.blockSignals(False)
+            self.combo_mon_pos_unit.blockSignals(False)
             self.combo_mon_plane.blockSignals(False)
             self.combo_mon_type.blockSignals(False)
             
@@ -807,9 +906,9 @@ class ParameterPanel(QWidget):
         if idx == 0: # XY Plane (Normal Z)
             self.lbl_mon_pos_label.setText("设置 Z 轴位置 (Set Z Position):")
             self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Z-Axis (Propagation)")
-            self.sb_mon_pos.setSuffix(" um") # Or mm? User asked for um
+            # self.sb_mon_pos.setSuffix(" um") # Handled by combo now
             # Z range is technically infinite, but usually positive
-            self.sb_mon_pos.setRange(-100000, 100000)
+            # self.sb_mon_pos.setRange(-100000, 100000)
             self.sb_mon_pos.setStyleSheet("") # Clear warning
             
             self.lbl_range1.setText("X Range:")
@@ -818,9 +917,9 @@ class ParameterPanel(QWidget):
         elif idx == 1: # YZ Plane (Normal X)
             self.lbl_mon_pos_label.setText("设置 X 轴位置 (Set X Position):")
             self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): X-Axis")
-            self.sb_mon_pos.setSuffix(" um")
+            # self.sb_mon_pos.setSuffix(" um")
             # X range validation
-            self.sb_mon_pos.setRange(-x_max * 1.5, x_max * 1.5) # Allow slight over, warn if out
+            # self.sb_mon_pos.setRange(-x_max * 1.5, x_max * 1.5) # Allow slight over, warn if out
             
             self.lbl_range1.setText("Y Range:")
             self.lbl_range2.setText("Z Range:")
@@ -828,9 +927,9 @@ class ParameterPanel(QWidget):
         elif idx == 2: # XZ Plane (Normal Y)
             self.lbl_mon_pos_label.setText("设置 Y 轴位置 (Set Y Position):")
             self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Y-Axis")
-            self.sb_mon_pos.setSuffix(" um")
+            # self.sb_mon_pos.setSuffix(" um")
             # Y range validation
-            self.sb_mon_pos.setRange(-y_max * 1.5, y_max * 1.5)
+            # self.sb_mon_pos.setRange(-y_max * 1.5, y_max * 1.5)
 
             self.lbl_range1.setText("X Range:")
             self.lbl_range2.setText("Z Range:")
@@ -871,6 +970,10 @@ class ParameterPanel(QWidget):
     def validate_monitor_pos(self):
         idx = self.combo_mon_plane.currentIndex()
         val = self.sb_mon_pos.value()
+        unit = self.combo_mon_pos_unit.currentText()
+        
+        # Convert to um for validation
+        val_um = val * (1000 if unit == 'mm' else 1)
         
         nx = self.sb_nx.value()
         ny = self.sb_ny.value()
@@ -884,13 +987,13 @@ class ParameterPanel(QWidget):
         msg = ""
         
         if idx == 1: # X
-            if abs(val) > x_max:
+            if abs(val_um) > x_max:
                 is_valid = False
-                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-x_max:.1f}, {x_max:.1f}])"
+                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-x_max:.1f}, {x_max:.1f}] um)"
         elif idx == 2: # Y
-            if abs(val) > y_max:
+            if abs(val_um) > y_max:
                 is_valid = False
-                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-y_max:.1f}, {y_max:.1f}])"
+                msg = f"警告: 超出仿真边界 (Warning: Out of bounds [{-y_max:.1f}, {y_max:.1f}] um)"
                 
         if not is_valid:
             self.sb_mon_pos.setStyleSheet("border: 1px solid red; background-color: #FFDDDD;")
@@ -914,13 +1017,15 @@ class ParameterPanel(QWidget):
         if row >= 0:
             monitor = self.monitors[row]
             new_pos = self.sb_mon_pos.value()
+            new_unit = self.combo_mon_pos_unit.currentText()
             new_plane = self.combo_mon_plane.currentIndex()
             
             # Check conflict if pos or plane changed
             temp_mon = monitor.copy()
             # Normalize pos key
             temp_mon['pos'] = new_pos
-            temp_mon['z'] = new_pos # Keep legacy z for compatibility check, though conflict logic needs update
+            temp_mon['pos_unit'] = new_unit
+            temp_mon['z'] = new_pos # Legacy key
             temp_mon['plane'] = new_plane
             
             # Conflict logic needs to know what 'z' means now.
@@ -935,7 +1040,8 @@ class ParameterPanel(QWidget):
             
             # Update monitor
             monitor['pos'] = new_pos
-            monitor['z'] = new_pos # For backward compat, though misleading for X/Y planes
+            monitor['pos_unit'] = new_unit
+            monitor['z'] = new_pos # For backward compat
             monitor['plane'] = new_plane
             monitor['type'] = self.combo_mon_type.currentIndex()
             

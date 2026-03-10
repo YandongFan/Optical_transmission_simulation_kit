@@ -324,10 +324,15 @@ class MainWindow(QMainWindow):
                 xy_monitors = [] # XY
                 
                 for m in monitors_config:
-                    # m['pos'] is in um. m['plane'] is type.
+                    # m['pos'] is in um or mm. m['plane'] is type.
                     plane_type = m['plane']
-                    pos_val = m.get('pos', m.get('z', 0)) # um
-                    fixed_val_m = pos_val * 1e-6
+                    pos_val = m.get('pos', m.get('z', 0))
+                    pos_unit = m.get('pos_unit', 'um')
+                    
+                    if pos_unit == 'mm':
+                        fixed_val_m = pos_val * 1e-3
+                    else:
+                        fixed_val_m = pos_val * 1e-6
                     
                     # Ranges
                     ranges = {}
@@ -369,7 +374,7 @@ class MainWindow(QMainWindow):
                 # Determine Z range
                 max_z = events[-1]['z']
                 if xy_monitors:
-                    max_xy = max(m['z'] for m in xy_monitors)
+                    max_xy = max(m['z'] for m in xy_monitors) # m['z'] here is fixed_val_m (meters)
                     max_z = max(max_z, max_xy)
                     
                 # If max_z is small, default to 1mm
