@@ -34,7 +34,6 @@ class AngularSpectrumPropagator(Propagator):
         :param distance: 传播距离 z (Propagation distance) [m]
         :return: 传播后的光场 (Propagated optical field)
         """
-        E = field.E
         device = field.device
         
         # Move grid frequencies to device
@@ -57,17 +56,19 @@ class AngularSpectrumPropagator(Propagator):
         # Note: torch.exp handles complex exponent correctly
         H = torch.exp(1j * KZ * distance)
         
-        # 1. FFT
-        E_fft = torch.fft.fft2(E)
-        
-        # 2. Multiply by Transfer Function
-        E_new_fft = E_fft * H
-        
-        # 3. IFFT
-        E_new = torch.fft.ifft2(E_new_fft)
-        
         # Create new field object
         new_field = OpticalField(self.grid, device=device)
-        new_field.set_field(E_new)
+
+        # Propagate Ex
+        Ex_fft = torch.fft.fft2(field.Ex)
+        Ex_new_fft = Ex_fft * H
+        Ex_new = torch.fft.ifft2(Ex_new_fft)
+        new_field.Ex = Ex_new
+        
+        # Propagate Ey
+        Ey_fft = torch.fft.fft2(field.Ey)
+        Ey_new_fft = Ey_fft * H
+        Ey_new = torch.fft.ifft2(Ey_new_fft)
+        new_field.Ey = Ey_new
         
         return new_field

@@ -50,9 +50,10 @@ class VisualizationPanel(QWidget):
         self.phase_canvas.clear()
         self.cross_section_canvas.clear()
 
-    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, complex_real=None, complex_imag=None):
+    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, components=None):
         """
         添加监视器结果 (Add monitor result)
+        :param components: dict of {'Ex': data, 'Ey': data, 'Ez': data} (complex numpy arrays)
         """
         self.monitor_data[name] = {
             'field': field_data,
@@ -60,8 +61,7 @@ class VisualizationPanel(QWidget):
             'phase': phase_data,
             'x': x,
             'y': y,
-            'complex_real': complex_real,
-            'complex_imag': complex_imag
+            'components': components if components else {}
         }
         
         # Add to combo box if not exists
@@ -72,7 +72,7 @@ class VisualizationPanel(QWidget):
         if self.combo_monitors.currentText() == name:
             self.on_monitor_changed(self.combo_monitors.currentIndex())
         elif self.combo_monitors.count() == 1:
-             self.on_monitor_changed(0)
+            self.on_monitor_changed(0)
 
     def on_monitor_changed(self, index):
         """
@@ -82,55 +82,94 @@ class VisualizationPanel(QWidget):
         if name in self.monitor_data:
             data = self.monitor_data[name]
             self.update_plots(data['field'], data['intensity'], data['phase'], data['x'], data['y'], 
-                              data.get('complex_real'), data.get('complex_imag'))
+                              data.get('components'))
 
-    def update_plots(self, field_data, intensity_data, phase_data, x, y, complex_real=None, complex_imag=None):
+    def update_plots(self, field_data, intensity_data, phase_data, x, y, components=None):
         """
         更新绘图 (Update plots)
         """
-        # Update Intensity
-        # Assuming x, y are 1D arrays or 2D meshgrids. imshow expects extent=[xmin, xmax, ymin, ymax]
+        # Determine extent
         if x.ndim == 2:
             extent = [x.min(), x.max(), y.min(), y.max()]
         else:
             extent = [x[0], x[-1], y[0], y[-1]]
             
-        self.intensity_canvas.plot_heatmap(intensity_data, extent, "Intensity Distribution (|E|^2)")
+        # Update Main Tabs
+        self.intensity_canvas.plot_heatmap(intensity_data, extent, "Total Intensity (|E|^2)")
+        self.phase_canvas.plot_heatmap(phase_data, extent, "Phase (rad)", cmap='hsv')
         
-        # Update Phase
-        self.phase_canvas.plot_heatmap(phase_data, extent, "Phase Distribution (rad)", cmap='hsv')
-        
-        # Update Cross Section (Central row)
+        # Cross Section
         mid_row = intensity_data.shape[0] // 2
-        # If x is 2D, take the row
         if x.ndim == 2:
             x_line = x[mid_row, :]
         else:
             x_line = x
-            
         self.cross_section_canvas.plot_line(x_line, intensity_data[mid_row, :], 
-                                          f"Cross Section (y={y.mean():.2f} um)", "x (um)", "Intensity")
+                                          f"Cross Section (y={y.mean() if hasattr(y, 'mean') else y[mid_row]:.2f} um)", "x (um)", "Intensity")
 
-        # Handle Complex Field Tabs
-        # Tabs indices: 0:Intensity, 1:Phase, 2:CrossSection
-        # We want 3:Real, 4:Imag
-        
-        # Remove existing extra tabs if any
+        # Handle Component Tabs
+        # Remove existing extra tabs (indices > 2)
         while self.tabs.count() > 3:
             self.tabs.removeTab(3)
             
-        if complex_real is not None and complex_imag is not None:
-            # Add Real Tab
-            real_canvas = PlotCanvas(self, width=5, height=4)
-            self.tabs.addTab(real_canvas, "complex field (real E)")
-            real_canvas.plot_heatmap(complex_real, extent, "Real Part of E-field", cmap='bwr')
-            
-            # Add Imag Tab
-            imag_canvas = PlotCanvas(self, width=5, height=4)
-            self.tabs.addTab(imag_canvas, "complex field (imag E)")
-            imag_canvas.plot_heatmap(complex_imag, extent, "Imaginary Part of E-field", cmap='bwr')
+        if components:
+            for comp_name, comp_data in components.items():
+                if comp_data is None: continue
+                
+                # Create canvas for 2 subplots
+                comp_canvas = PlotCanvas(self, width=8, height=4)
+                self.tabs.addTab(comp_canvas, f"{comp_name} 分量 (Component)")
+                
+                comp_int = np.abs(comp_data)**2
+                comp_phase = np.angle(comp_data)
+                
+                comp_canvas.plot_dual_heatmap(
+                    comp_int, comp_phase, extent, 
+                    f"|{comp_name}|^2", f"Arg({comp_name})",
+                    cmap1='viridis', cmap2='hsv'
+                )
 
-    def export_data(self, monitor_name):
+class PlotCanvas(FigureCanvas):
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.updateGeometry()
+
+    def plot_heatmap(self, data, extent, title, cmap='viridis'):
+        self.fig.clf() 
+        ax = self.fig.add_subplot(111)
+        im = ax.imshow(data, extent=extent, origin='lower', cmap=cmap, aspect='auto')
+        ax.set_title(title)
+        ax.set_xlabel('x (um)')
+        ax.set_ylabel('y (um)')
+        self.fig.colorbar(im, ax=ax)
+        self.draw()
+
+    def plot_dual_heatmap(self, data1, data2, extent, title1, title2, cmap1='viridis', cmap2='hsv'):
+        self.fig.clf()
+        
+        # Subplot 1
+        ax1 = self.fig.add_subplot(121)
+        im1 = ax1.imshow(data1, extent=extent, origin='lower', cmap=cmap1, aspect='auto')
+        ax1.set_title(title1)
+        ax1.set_xlabel('x (um)')
+        ax1.set_ylabel('y (um)')
+        self.fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        
+        # Subplot 2
+        ax2 = self.fig.add_subplot(122)
+        im2 = ax2.imshow(data2, extent=extent, origin='lower', cmap=cmap2, aspect='auto')
+        ax2.set_title(title2)
+        ax2.set_xlabel('x (um)')
+        ax2.set_ylabel('y (um)')
+        self.fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+        
+        self.fig.tight_layout()
+        self.draw()
+
+    def plot_line(self, x, y, title, xlabel, ylabel):
         """
         导出指定监视器的数据 (Export specific monitor data)
         """
@@ -192,6 +231,28 @@ class PlotCanvas(FigureCanvas):
         ax.set_xlabel('x (um)')
         ax.set_ylabel('y (um)')
         self.fig.colorbar(im, ax=ax)
+        self.draw()
+
+    def plot_dual_heatmap(self, data1, data2, extent, title1, title2, cmap1='viridis', cmap2='hsv'):
+        self.fig.clf()
+        
+        # Subplot 1
+        ax1 = self.fig.add_subplot(121)
+        im1 = ax1.imshow(data1, extent=extent, origin='lower', cmap=cmap1, aspect='auto')
+        ax1.set_title(title1)
+        ax1.set_xlabel('x (um)')
+        ax1.set_ylabel('y (um)')
+        self.fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        
+        # Subplot 2
+        ax2 = self.fig.add_subplot(122)
+        im2 = ax2.imshow(data2, extent=extent, origin='lower', cmap=cmap2, aspect='auto')
+        ax2.set_title(title2)
+        ax2.set_xlabel('x (um)')
+        ax2.set_ylabel('y (um)')
+        self.fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+        
+        self.fig.tight_layout()
         self.draw()
 
     def plot_line(self, x, y, title, xlabel, ylabel):

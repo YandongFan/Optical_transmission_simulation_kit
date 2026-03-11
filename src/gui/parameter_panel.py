@@ -229,6 +229,26 @@ class ParameterPanel(QWidget):
         type_group.setLayout(t_layout)
         layout.addWidget(type_group)
         
+        # --- Polarization Settings ---
+        pol_group = QGroupBox("偏振设置 (Polarization Settings)")
+        pol_layout = QFormLayout()
+        
+        self.combo_pol_type = QComboBox()
+        self.combo_pol_type.addItems(["线偏振 (Linear)", "左旋圆偏振 (LCP)", "右旋圆偏振 (RCP)", "无偏振 (Unpolarized)"])
+        self.combo_pol_type.currentIndexChanged.connect(self.update_pol_ui)
+        
+        self.sb_pol_angle = QDoubleSpinBox()
+        self.sb_pol_angle.setRange(0, 180)
+        self.sb_pol_angle.setDecimals(1)
+        self.sb_pol_angle.setSuffix(" deg")
+        self.sb_pol_angle.setToolTip("线偏振角度 (Linear Polarization Angle, 0-180)")
+        
+        pol_layout.addRow("偏振类型 (Type):", self.combo_pol_type)
+        pol_layout.addRow("线偏振角度 (Angle):", self.sb_pol_angle)
+        
+        pol_group.setLayout(pol_layout)
+        layout.addWidget(pol_group)
+
         # --- Common Parameters ---
         common_group = QGroupBox("基础参数 (Basic Parameters)")
         c_layout = QFormLayout()
@@ -340,9 +360,18 @@ class ParameterPanel(QWidget):
         
         # Initialize
         self.update_source_ui(0)
+        self.update_pol_ui(0)
         
         layout.addStretch()
         return tab
+
+    def update_pol_ui(self, index):
+        # 0: Linear -> Show Angle
+        # 1, 2, 3 -> Hide Angle
+        if index == 0:
+            self.sb_pol_angle.setEnabled(True)
+        else:
+            self.sb_pol_angle.setEnabled(False)
 
     def update_custom_help(self):
         idx = self.combo_coord_sys.currentIndex()
@@ -566,6 +595,28 @@ class ParameterPanel(QWidget):
         layout.addWidget(stack)
         setattr(self, f"stack_{prefix}", stack)
         
+        # Affected Polarization
+        pol_group = QGroupBox("作用偏振 (Affected Polarization)")
+        pol_layout = QVBoxLayout()
+        
+        cb_lin = QCheckBox("X° 线偏振 (Linear X)")
+        cb_lcp = QCheckBox("左旋圆偏振 (LCP)")
+        cb_rcp = QCheckBox("右旋圆偏振 (RCP)")
+        cb_unpol = QCheckBox("无偏振 (Unpolarized)")
+        cb_unpol.setChecked(True) # Default
+        
+        pol_layout.addWidget(cb_lin)
+        pol_layout.addWidget(cb_lcp)
+        pol_layout.addWidget(cb_rcp)
+        pol_layout.addWidget(cb_unpol)
+        pol_group.setLayout(pol_layout)
+        layout.addWidget(pol_group)
+        
+        setattr(self, f"cb_{prefix}_pol_lin_x", cb_lin)
+        setattr(self, f"cb_{prefix}_pol_lcp", cb_lcp)
+        setattr(self, f"cb_{prefix}_pol_rcp", cb_rcp)
+        setattr(self, f"cb_{prefix}_pol_unpol", cb_unpol)
+        
         # Additional Angle Trans for Mod2
         if prefix == 'mod2':
             angle_group = QGroupBox("角度-透射率 (Angle-Transmission)")
@@ -696,6 +747,34 @@ class ParameterPanel(QWidget):
         settings_layout.addRow("数据类型 (Data Type):", self.combo_mon_type)
         settings_layout.addRow(self.range_group)
         
+        # Output Components
+        comp_group = QGroupBox("额外输出分量 (Extra Components)")
+        comp_layout = QHBoxLayout()
+        
+        self.cb_mon_ex = QCheckBox("Ex")
+        self.cb_mon_ey = QCheckBox("Ey")
+        self.cb_mon_ez = QCheckBox("Ez")
+        
+        # Update visibility based on plane type
+        # Logic: 
+        # XY (0): Ex, Ey (Ez usually small but can be calc) -> Requirement 3a: "XY: Ex, Ey"
+        # XZ (2): Ex, Ez
+        # YZ (1): Ey, Ez
+        # Actually user requirement 3a says:
+        # "XY plane: only show Ex Ey boxes"
+        # "XZ plane: only show Ex Ez boxes"
+        # "YZ plane: only show Ey Ez boxes"
+        
+        comp_layout.addWidget(self.cb_mon_ex)
+        comp_layout.addWidget(self.cb_mon_ey)
+        comp_layout.addWidget(self.cb_mon_ez)
+        comp_group.setLayout(comp_layout)
+        settings_layout.addRow(comp_group)
+        
+        self.cb_mon_ex.stateChanged.connect(self.update_current_monitor)
+        self.cb_mon_ey.stateChanged.connect(self.update_current_monitor)
+        self.cb_mon_ez.stateChanged.connect(self.update_current_monitor)
+        
         self.btn_export_data = QPushButton("导出监视器数据 (Export Data)")
         self.btn_export_data.clicked.connect(self.export_monitor_data)
         settings_layout.addRow(self.btn_export_data)
@@ -715,7 +794,8 @@ class ParameterPanel(QWidget):
             'pos': 0.0,
             'pos_unit': 'mm',
             'plane': 0,
-            'type': 0
+            'type': 0,
+            'output_components': []
         }
         if self.detect_conflict(monitor):
             QMessageBox.warning(self, "Conflict", "A monitor already exists at this position.")
@@ -797,7 +877,8 @@ class ParameterPanel(QWidget):
                     'pos_unit': unit,
                     'z': pos, # Legacy
                     'plane': 0, 
-                    'type': 0
+                    'type': 0,
+                    'output_components': []
                 }
                 
                 if not self.detect_conflict(monitor):
@@ -886,6 +967,20 @@ class ParameterPanel(QWidget):
             self.sb_range1_max.blockSignals(False)
             self.sb_range2_min.blockSignals(False)
             self.sb_range2_max.blockSignals(False)
+            
+            # Load components
+            comps = monitor.get('output_components', [])
+            self.cb_mon_ex.blockSignals(True)
+            self.cb_mon_ey.blockSignals(True)
+            self.cb_mon_ez.blockSignals(True)
+            
+            self.cb_mon_ex.setChecked('Ex' in comps)
+            self.cb_mon_ey.setChecked('Ey' in comps)
+            self.cb_mon_ez.setChecked('Ez' in comps)
+            
+            self.cb_mon_ex.blockSignals(False)
+            self.cb_mon_ey.blockSignals(False)
+            self.cb_mon_ez.blockSignals(False)
             
             self.update_monitor_ui_state()
         else:
@@ -1011,6 +1106,23 @@ class ParameterPanel(QWidget):
         elif idx == 1: self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): X-Axis")
         elif idx == 2: self.lbl_mon_fixed_dim.setText("固定维度 (Fixed Dimension): Y-Axis")
         self.lbl_mon_fixed_dim.setStyleSheet("color: gray; font-style: italic;")
+        
+        # Update component checkboxes visibility
+        self.cb_mon_ex.setVisible(True)
+        self.cb_mon_ey.setVisible(True)
+        self.cb_mon_ez.setVisible(True)
+        
+        if idx == 0: # XY
+            self.cb_mon_ez.setVisible(False)
+            self.cb_mon_ez.setChecked(False)
+        elif idx == 1: # YZ (Normal X) -> Ey, Ez dominant? 
+            # Requirement: "YZ plane: only show Ey Ez"
+            self.cb_mon_ex.setVisible(False)
+            self.cb_mon_ex.setChecked(False)
+        elif idx == 2: # XZ (Normal Y) -> Ex, Ez dominant?
+            # Requirement: "XZ plane: only show Ex Ez"
+            self.cb_mon_ey.setVisible(False)
+            self.cb_mon_ey.setChecked(False)
 
     def update_current_monitor(self):
         row = self.monitor_list.currentRow()
@@ -1050,6 +1162,13 @@ class ParameterPanel(QWidget):
             monitor['range2_min'] = self.sb_range2_min.value()
             monitor['range2_max'] = self.sb_range2_max.value()
             
+            # Components
+            comps = []
+            if self.cb_mon_ex.isChecked(): comps.append('Ex')
+            if self.cb_mon_ey.isChecked(): comps.append('Ey')
+            if self.cb_mon_ez.isChecked(): comps.append('Ez')
+            monitor['output_components'] = comps
+            
             self.validate_monitor_pos()
             self.validate_monitor_ranges()
 
@@ -1079,6 +1198,8 @@ class ParameterPanel(QWidget):
             
         data['source'] = {
             'type_idx': self.combo_source.currentIndex(),
+            'polarization_type': self.combo_pol_type.currentIndex(),
+            'linear_angle': self.sb_pol_angle.value(),
             'amplitude': self.sb_amplitude.value(),
             'z_pos': self.sb_z_pos.value(),
             'normalize': self.cb_normalize.isChecked(),
@@ -1096,10 +1217,17 @@ class ParameterPanel(QWidget):
         
         # Modulators
         for prefix in ['mod1', 'mod2']:
+            pol_list = []
+            if getattr(self, f"cb_{prefix}_pol_lin_x").isChecked(): pol_list.append('linear_x')
+            if getattr(self, f"cb_{prefix}_pol_lcp").isChecked(): pol_list.append('lcp')
+            if getattr(self, f"cb_{prefix}_pol_rcp").isChecked(): pol_list.append('rcp')
+            if getattr(self, f"cb_{prefix}_pol_unpol").isChecked(): pol_list.append('unpolarized')
+            
             mod_data = {
                 'z': getattr(self, f"sb_{prefix}_z").value(),
                 'z_unit': getattr(self, f"combo_{prefix}_z_unit").currentText(),
                 'type_idx': getattr(self, f"combo_{prefix}_type").currentIndex(),
+                'affected_polarizations': pol_list,
                 'lens': {
                     'D': getattr(self, f"sb_{prefix}_D").value(),
                     'D_unit': getattr(self, f"combo_{prefix}_D_unit").currentText(),
@@ -1148,6 +1276,8 @@ class ParameterPanel(QWidget):
         if 'source' in data:
             s = data['source']
             self.combo_source.setCurrentIndex(s.get('type_idx', 0))
+            self.combo_pol_type.setCurrentIndex(s.get('polarization_type', 0))
+            self.sb_pol_angle.setValue(s.get('linear_angle', 0.0))
             self.sb_amplitude.setValue(s.get('amplitude', 1.0))
             self.sb_z_pos.setValue(s.get('z_pos', 0.0))
             self.cb_normalize.setChecked(s.get('normalize', False))
@@ -1177,6 +1307,12 @@ class ParameterPanel(QWidget):
                 getattr(self, f"sb_{prefix}_z").setValue(m.get('z', 0))
                 getattr(self, f"combo_{prefix}_z_unit").setCurrentText(m.get('z_unit', 'um'))
                 getattr(self, f"combo_{prefix}_type").setCurrentIndex(m.get('type_idx', 0))
+                
+                pols = m.get('affected_polarizations', ['unpolarized'])
+                getattr(self, f"cb_{prefix}_pol_lin_x").setChecked('linear_x' in pols)
+                getattr(self, f"cb_{prefix}_pol_lcp").setChecked('lcp' in pols)
+                getattr(self, f"cb_{prefix}_pol_rcp").setChecked('rcp' in pols)
+                getattr(self, f"cb_{prefix}_pol_unpol").setChecked('unpolarized' in pols)
                 
                 if 'lens' in m:
                     l = m['lens']

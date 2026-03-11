@@ -148,10 +148,17 @@ class MainWindow(QMainWindow):
         
         source_type_idx = pp.combo_source.currentIndex()
         
+        # Polarization
+        pol_type = pp.combo_pol_type.currentIndex()
+        lin_angle = pp.sb_pol_angle.value()
+        
         params = {
             'nx': nx, 'ny': ny, 'dx': dx, 'dy': dy, 'wavelength': wavelength,
             'amplitude': amplitude, 'z_pos': z_pos, 'normalize': normalize,
-            'type_idx': source_type_idx
+            'type_idx': source_type_idx,
+            'polarization_type': pol_type,
+            'linear_angle': lin_angle,
+            'phase_offset': 0.0 # Not exposed in UI yet, default 0
         }
         
         # Specific
@@ -202,9 +209,17 @@ class MainWindow(QMainWindow):
         combo_type = getattr(pp, f"combo_{prefix}_type")
         type_idx = combo_type.currentIndex()
         
+        # Affected Polarizations
+        pol_list = []
+        if getattr(pp, f"cb_{prefix}_pol_lin_x").isChecked(): pol_list.append('linear_x')
+        if getattr(pp, f"cb_{prefix}_pol_lcp").isChecked(): pol_list.append('lcp')
+        if getattr(pp, f"cb_{prefix}_pol_rcp").isChecked(): pol_list.append('rcp')
+        if getattr(pp, f"cb_{prefix}_pol_unpol").isChecked(): pol_list.append('unpolarized')
+        
         config = {
             'z': z_val,
-            'type_idx': type_idx
+            'type_idx': type_idx,
+            'affected_polarizations': pol_list
         }
         
         # Lens params if needed
@@ -238,31 +253,28 @@ class MainWindow(QMainWindow):
             # Gaussian beam has z parameter which defines wavefront curvature at that point.
             
             if idx == 0: # Plane
-                source = PlaneWave(self.grid, amplitude=amp)
+                source = PlaneWave(self.grid, amplitude=amp, 
+                                   polarization_type=params['polarization_type'],
+                                   linear_angle=params['linear_angle'])
             elif idx == 1: # Gaussian
-                # If z_pos is used as 'z' parameter for Gaussian, it means distance from waist.
-                # If waist is at 0, and we want to start simulation at z=0, but beam waist is at z=0.
-                # Let's assume params['z_pos'] is the 'z' argument for GaussianBeam (distance from waist)
-                source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=params['z_pos'])
+                source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=params['z_pos'],
+                                      polarization_type=params['polarization_type'],
+                                      linear_angle=params['linear_angle'])
             elif idx == 2: # LG
                 source = LaguerreGaussianBeam(self.grid, amplitude=amp, w0=params['w0'], 
-                                              p=params['p'], l=params['l'])
+                                              p=params['p'], l=params['l'],
+                                              polarization_type=params['polarization_type'],
+                                              linear_angle=params['linear_angle'])
             elif idx == 3: # Bessel
-                # Placeholder using Gaussian for now or custom implementation?
-                # Source.py didn't have Bessel implementation shown fully, only header in plan.
-                # Actually I saw 'BesselBeam' in plan but 'CustomSource' in file? 
-                # Let's check source.py content again.
-                # It has PlaneWave, GaussianBeam, LaguerreGaussianBeam, CustomSource.
-                # It does NOT have BesselBeam class explicitly in the read output!
-                # Wait, I read source.py and it ended at CustomSource.
-                # I'll check if I missed it or if it's missing.
-                # Assuming missing, I'll use CustomSource or just error.
-                # For now, let's treat it as Gaussian or error.
-                source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=params['z_pos'])
+                source = GaussianBeam(self.grid, amplitude=amp, w0=params['w0'], z=params['z_pos'],
+                                      polarization_type=params['polarization_type'],
+                                      linear_angle=params['linear_angle'])
                 print("Warning: Bessel Beam not implemented, using Gaussian.")
             elif idx == 4: # Custom
                 source = CustomSource(self.grid, amplitude=amp, equation=params['equation'], 
-                                      variables=params['variables'])
+                                      variables=params['variables'],
+                                      polarization_type=params['polarization_type'],
+                                      linear_angle=params['linear_angle'])
                 
             self.field = source.generate(device=self.device)
             
@@ -276,10 +288,16 @@ class MainWindow(QMainWindow):
             x_um = self.grid.X * 1e6
             y_um = self.grid.Y * 1e6
             intensity = self.field.get_intensity().cpu().numpy()
-            phase = self.field.get_phase().cpu().numpy()
+            phase = self.field.get_phase().cpu().numpy() # Phase of Ex or Ey? Default Ex
+            
+            # Prepare components for visualization
+            components = {
+                'Ex': self.field.Ex.cpu().numpy(),
+                'Ey': self.field.Ey.cpu().numpy()
+            }
             
             self.visualization_panel.add_monitor_result("Source Preview", self.field.to_numpy(), 
-                                                        intensity, phase, x_um, y_um)
+                                                        intensity, phase, x_um, y_um, components=components)
                                                         
             self.status_bar.showMessage("Preview updated.")
             
@@ -350,7 +368,8 @@ class MainWindow(QMainWindow):
                                       name=m['name'], 
                                       plane_type=plane_type,
                                       fixed_value=fixed_val_m,
-                                      ranges=ranges)
+                                      ranges=ranges,
+                                      output_components=m.get('output_components', []))
                     
                     # Store type for visualization
                     mon_obj.data_type = m.get('type', 0)
@@ -501,27 +520,38 @@ class MainWindow(QMainWindow):
         type_idx = config['type_idx']
         type_ = event['type']
         
+        # Get source params for polarization angle
+        src_params = self.get_source_params()
+        pol_angle = src_params['linear_angle']
+        pols = config.get('affected_polarizations', ['unpolarized'])
+        
+        mod_kwargs = {
+            'polarizations': pols,
+            'polarization_angle': pol_angle
+        }
+        
         if type_idx == 0: # Custom Mask
             prefix = type_
             if prefix == 'mod1':
                 mod = SpatialModulator(self.grid, 
                                         amplitude_mask=self.parameter_panel.mod1_amp,
-                                        phase_mask=self.parameter_panel.mod1_phase)
+                                        phase_mask=self.parameter_panel.mod1_phase,
+                                        **mod_kwargs)
                 return mod.modulate(field)
             elif prefix == 'mod2':
-                mod_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase)
+                mod_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase, **mod_kwargs)
                 field = mod_spatial.modulate(field)
-                mod_angle = AngleModulator(self.grid, angle_transmission_curve=None) 
+                mod_angle = AngleModulator(self.grid, angle_transmission_curve=None, **mod_kwargs) 
                 return mod_angle.modulate(field)
                 
         elif type_idx == 1: # Ideal Lens
-            lens = IdealLens(self.grid, focal_length=config['f'])
+            lens = IdealLens(self.grid, focal_length=config['f'], **mod_kwargs)
             return lens.modulate(field)
         elif type_idx == 2: # Cyl X
-            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='x')
+            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='x', **mod_kwargs)
             return lens.modulate(field)
         elif type_idx == 3: # Cyl Y
-            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='y')
+            lens = CylindricalLens(self.grid, focal_length=config['f'], axis='y', **mod_kwargs)
             return lens.modulate(field)
         return field
 
@@ -542,15 +572,12 @@ class MainWindow(QMainWindow):
             x = np.array(monitor.z_coords) * 1e6 # Horizontal: Z
             y = monitor.grid_x * 1e6 # Vertical: X
             
-        # Phase might be complex to visualize if flattened? 
-        # But monitor.field_data should be shaped correctly by finalize() or record()
+        # Phase
         phase = np.angle(field)
         
-        complex_real = None
-        complex_imag = None
-        if getattr(monitor, 'data_type', 0) == 1: # Complex Field
-            complex_real = np.real(field)
-            complex_imag = np.imag(field)
+        # Prepare components for visualization panel
+        # monitor.component_data contains {'Ex': ..., 'Ey': ..., 'Ez': ...}
+        # We need to pass this dictionary to visualization panel
         
         self.visualization_panel.add_monitor_result(name, field, intensity, phase, x, y, 
-                                                    complex_real=complex_real, complex_imag=complex_imag)
+                                                    components=monitor.component_data)

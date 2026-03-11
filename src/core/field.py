@@ -51,45 +51,83 @@ class OpticalField:
         # 复振幅分布 (Complex amplitude distribution) E(x, y)
         # 初始化为零场 (Initialize as zero field)
         # 默认使用 complex64 以节省显存 (Default to complex64 to save VRAM)
-        self.E = torch.zeros((grid.ny, grid.nx), dtype=torch.complex64, device=device)
+        # Vector field support: Ex, Ey
+        self.Ex = torch.zeros((grid.ny, grid.nx), dtype=torch.complex64, device=device)
+        self.Ey = torch.zeros((grid.ny, grid.nx), dtype=torch.complex64, device=device)
+
+    @property
+    def E(self):
+        """
+        Backward compatibility: return Ex (Scalar approximation usually assumes Linear X)
+        """
+        return self.Ex
+
+    @E.setter
+    def E(self, value):
+        """
+        Backward compatibility: set Ex
+        """
+        self.Ex = value
     
-    def set_field(self, field_data):
+    def set_field(self, field_data, component='Ex'):
         """
         设置光场分布 (Set field distribution)
         :param field_data: numpy array or torch tensor
+        :param component: 'Ex' or 'Ey'
         """
+        data = None
         if isinstance(field_data, np.ndarray):
-            self.E = torch.from_numpy(field_data).to(self.device)
+            data = torch.from_numpy(field_data).to(self.device)
         elif isinstance(field_data, torch.Tensor):
-            self.E = field_data.to(self.device)
+            data = field_data.to(self.device)
         else:
             raise ValueError("Unsupported data type")
+            
+        if component == 'Ex':
+            self.Ex = data
+        elif component == 'Ey':
+            self.Ey = data
+        else:
+            raise ValueError(f"Unknown component: {component}")
 
     def normalize(self):
         """
         归一化电场，使最大幅值为1 (Normalize field so max amplitude is 1)
+        Based on total intensity |Ex|^2 + |Ey|^2
         """
-        max_val = torch.max(torch.abs(self.E))
+        intensity = self.get_intensity()
+        max_val = torch.sqrt(torch.max(intensity))
         if max_val > 0:
-            self.E = self.E / max_val
+            self.Ex = self.Ex / max_val
+            self.Ey = self.Ey / max_val
 
     def get_intensity(self):
         """
-        获取光强分布 (Get intensity distribution) |E|^2
+        获取光强分布 (Get intensity distribution) |Ex|^2 + |Ey|^2
         :return: torch tensor (on device)
         """
-        return torch.abs(self.E)**2
+        return torch.abs(self.Ex)**2 + torch.abs(self.Ey)**2
     
-    def get_phase(self):
+    def get_phase(self, component='Ex'):
         """
         获取相位分布 (Get phase distribution)
+        :param component: 'Ex' or 'Ey'
         :return: torch tensor (on device)
         """
-        return torch.angle(self.E)
+        if component == 'Ex':
+            return torch.angle(self.Ex)
+        elif component == 'Ey':
+            return torch.angle(self.Ey)
+        return torch.angle(self.Ex) # Default
 
-    def to_numpy(self):
+    def to_numpy(self, component='Ex'):
         """
         转换为 numpy 数组 (Convert to numpy array)
+        :param component: 'Ex' or 'Ey'
         :return: complex numpy array
         """
-        return self.E.cpu().numpy()
+        if component == 'Ex':
+            return self.Ex.cpu().numpy()
+        elif component == 'Ey':
+            return self.Ey.cpu().numpy()
+        return self.Ex.cpu().numpy()
