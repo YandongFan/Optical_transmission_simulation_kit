@@ -310,210 +310,308 @@ class MainWindow(QMainWindow):
         """
         运行完整仿真 (Run Full Simulation)
         """
-        if self.field is None:
-            self.on_preview()
+        # Force read from config object (Req 2.c)
+        # Instead of relying on self.field (preview cache), we regenerate source from config.
+        config = self.parameter_panel.get_latest_config()
+        
+        try:
+            self.status_bar.showMessage("Running simulation...")
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(0)
+            self.visualization_panel.clear_data() # Clear previous results
             
-        if self.field:
-            try:
-                self.status_bar.showMessage("Running simulation...")
-                self.progress_bar.setVisible(True)
-                self.progress_bar.setValue(0)
-                self.visualization_panel.clear_data() # Clear previous results
-                
-                # Check normalization setting again
-                params = self.get_source_params()
-                if params['normalize']:
-                     self.field.normalize()
+            # DEBUG INFO
+            mod1_dbg = config.get('mod1', {})
+            mon_dbg = config.get('monitors', [])
+            dbg_msg = f"Starting Simulation...\nMod1 Type: {mod1_dbg.get('type_idx')}\n"
+            dbg_msg += f"Monitors: {len(mon_dbg)}\n"
+            if mon_dbg:
+                dbg_msg += f"Mon1 Components: {mon_dbg[0].get('output_components')}"
+            print(dbg_msg)
+            # End DEBUG
+            
+            # 1. Re-create Grid
+            grid_cfg = config.get('grid', {})
+            # get_project_data stores raw values (um), Grid needs meters
+            nx = int(grid_cfg.get('nx', 512))
+            ny = int(grid_cfg.get('ny', 512))
+            dx = float(grid_cfg.get('dx', 1.0)) * 1e-6
+            dy = float(grid_cfg.get('dy', 1.0)) * 1e-6
+            wavelength = float(grid_cfg.get('wavelength', 0.532)) * 1e-6
+            
+            self.grid = Grid(nx, ny, dx, dy, wavelength)
+            
+            # 2. Re-create Source
+            src_cfg = config.get('source', {})
+            idx = int(src_cfg.get('type_idx', 0))
+            amp = float(src_cfg.get('amplitude', 1.0))
+            z_pos = float(src_cfg.get('z_pos', 0.0)) * 1e-6
+            pol_type = int(src_cfg.get('polarization_type', 0))
+            lin_angle = float(src_cfg.get('linear_angle', 0.0))
+            
+            source = None
+            if idx == 0: # Plane
+                source = PlaneWave(self.grid, amplitude=amp, 
+                                   polarization_type=pol_type,
+                                   linear_angle=lin_angle)
+            elif idx == 1: # Gaussian
+                w0 = float(src_cfg.get('w0', 100.0)) * 1e-6
+                source = GaussianBeam(self.grid, amplitude=amp, w0=w0, z=z_pos,
+                                      polarization_type=pol_type,
+                                      linear_angle=lin_angle)
+            elif idx == 2: # LG
+                w0 = float(src_cfg.get('lg_w0', 100.0)) * 1e-6
+                p = int(src_cfg.get('lg_p', 0))
+                l = int(src_cfg.get('lg_l', 1))
+                source = LaguerreGaussianBeam(self.grid, amplitude=amp, w0=w0, 
+                                              p=p, l=l,
+                                              polarization_type=pol_type,
+                                              linear_angle=lin_angle)
+            elif idx == 3: # Bessel
+                w0 = float(src_cfg.get('bessel_w0', 100.0)) * 1e-6
+                source = GaussianBeam(self.grid, amplitude=amp, w0=w0, z=z_pos,
+                                      polarization_type=pol_type,
+                                      linear_angle=lin_angle)
+                print("Warning: Bessel Beam not implemented, using Gaussian.")
+            elif idx == 4: # Custom
+                custom_cfg = src_cfg.get('custom', {})
+                eq = custom_cfg.get('equation', '')
+                vars_list = custom_cfg.get('variables', [])
+                # Convert vars list to dict
+                vars_dict = {}
+                for v in vars_list:
+                    try:
+                        vars_dict[v['name']] = float(v['value'])
+                    except:
+                        pass
+                source = CustomSource(self.grid, amplitude=amp, equation=eq, 
+                                      variables=vars_dict,
+                                      polarization_type=pol_type,
+                                      linear_angle=lin_angle)
+            
+            current_field = source.generate(device=self.device)
+            
+            if src_cfg.get('normalize', False):
+                current_field.normalize()
 
-                propagator = AngularSpectrumPropagator(self.grid)
+            propagator = AngularSpectrumPropagator(self.grid)
+            
+            # Retrieve parameters (Using config directly or helper?)
+            # Helper get_modulator_config reads from UI. 
+            # We should update it or parse from config.
+            # config contains 'mod1', 'mod2' dicts.
+            
+            mod1_config = config.get('mod1', {})
+            mod2_config = config.get('mod2', {})
+            
+            # Fix units for mod config (stored as raw in project data)
+            # get_modulator_config did conversion.
+            def fix_mod_units(m_cfg):
+                # z
+                z_val = m_cfg.get('z', 0)
+                z_unit = m_cfg.get('z_unit', 'um')
+                if z_unit == 'mm': z_val *= 1e-3
+                elif z_unit == 'um': z_val *= 1e-6
+                m_cfg['z'] = z_val # Update in place/copy
                 
-                # Clone initial field to avoid modifying preview (Req 3.2)
-                current_field = OpticalField(self.grid, device=self.device)
-                current_field.set_field(self.field.E.clone())
-                
-                # Retrieve parameters
-                mod1_config = self.get_modulator_config('mod1')
-                mod2_config = self.get_modulator_config('mod2')
-                
-                monitors_config = self.parameter_panel.monitors
-                
-                # Identify Monitor Types
-                global_monitors = [] # YZ, XZ
-                xy_monitors = [] # XY
-                
-                for m in monitors_config:
-                    # m['pos'] is in um or mm. m['plane'] is type.
-                    plane_type = m['plane']
-                    pos_val = m.get('pos', m.get('z', 0))
-                    pos_unit = m.get('pos_unit', 'um')
-                    
-                    if pos_unit == 'mm':
-                        fixed_val_m = pos_val * 1e-3
+                # lens
+                if 'lens' in m_cfg:
+                    l = m_cfg['lens']
+                    if 'f' in l:
+                        f_val = l['f']
+                        f_unit = l.get('f_unit', 'um')
+                        if f_unit == 'mm': f_val *= 1e-3
+                        elif f_unit == 'um': f_val *= 1e-6
+                        m_cfg['f'] = f_val # Flatten for apply_modulator usage
                     else:
-                        fixed_val_m = pos_val * 1e-6
-                    
-                    # Ranges
-                    ranges = {}
-                    if plane_type == 0: # XY
-                        ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
-                        ranges['y'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
-                    elif plane_type == 1: # YZ
-                        ranges['y'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
-                        ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
-                    elif plane_type == 2: # XZ
-                        ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
-                        ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
-                    
-                    mon_obj = Monitor(position_z=fixed_val_m if plane_type==0 else 0, # Z for XY
-                                      name=m['name'], 
-                                      plane_type=plane_type,
-                                      fixed_value=fixed_val_m,
-                                      ranges=ranges,
-                                      output_components=m.get('output_components', []))
-                    
-                    # Store type for visualization
-                    mon_obj.data_type = m.get('type', 0)
-                    
-                    # Print geometry info (Req 3.1)
-                    # print(mon_obj.get_geometry_info()) # Monitor might not have this method yet?
-                    
-                    if plane_type == 0:
-                        xy_monitors.append({'z': fixed_val_m, 'monitor': mon_obj})
-                    else:
-                        global_monitors.append(mon_obj)
-                        
-                # Define Z-events (Modulators)
-                events = []
-                events.append({'z': mod1_config['z'], 'type': 'mod1', 'config': mod1_config})
-                events.append({'z': mod2_config['z'], 'type': 'mod2', 'config': mod2_config})
-                
-                # Sort Modulator events
-                events.sort(key=lambda x: x['z'])
-                
-                # Determine Z range
-                max_z = events[-1]['z']
-                if xy_monitors:
-                    max_xy = max(m['z'] for m in xy_monitors) # m['z'] here is fixed_val_m (meters)
-                    max_z = max(max_z, max_xy)
-                    
-                # If max_z is small, default to 1mm
-                if max_z < 1e-6: max_z = 1000e-6
-                
-                # Collect critical Z points
-                z_points = set()
-                z_points.add(0.0)
-                for e in events: z_points.add(e['z'])
-                for m in xy_monitors: z_points.add(m['z'])
-                
-                sorted_z_points = sorted(list(z_points))
-                
-                if not global_monitors:
-                    # Fast Event Loop (Only Modulators and XY Monitors)
-                    current_z = 0.0
-                    total_steps = len(sorted_z_points)
-                    
-                    # Initial record at Z=0 for XY monitors
-                    for m_wrapper in xy_monitors:
-                        if abs(m_wrapper['z'] - 0.0) < 1e-9:
-                            m_wrapper['monitor'].record(current_field, 0.0)
-                            self.visualize_monitor(m_wrapper['monitor'])
-
-                    for i, z in enumerate(sorted_z_points):
-                        if i == 0 and z == 0.0: continue
-
-                        if z > current_z:
-                            dist = z - current_z
-                            current_field = propagator.propagate(current_field, dist)
-                            current_z = z
-                            
-                        # Apply events at this Z
-                        for e in events:
-                            if abs(e['z'] - current_z) < 1e-9:
-                                current_field = self.apply_modulator(current_field, e)
-                                
-                        # XY Monitors
-                        for m_wrapper in xy_monitors:
-                            if abs(m_wrapper['z'] - current_z) < 1e-9:
-                                mon = m_wrapper['monitor']
-                                mon.record(current_field, current_z)
-                                self.visualize_monitor(mon)
-                                
-                        self.progress_bar.setValue(int((i + 1) / total_steps * 100))
-                        QApplication.processEvents()
-                        
+                        m_cfg['f'] = 0.1 # Default 100mm
                 else:
-                    # Stepping Mode (Global Monitors active)
-                    wavelength = self.grid.wavelength
-                    dz = 10 * wavelength 
-                    # Ensure at least 200 steps
-                    if dz > max_z / 200: dz = max_z / 200
-                    
-                    # Generate full Z steps including critical points
-                    full_z_list = [0.0]
-                    for i in range(len(sorted_z_points)-1):
-                        z1 = sorted_z_points[i]
-                        z2 = sorted_z_points[i+1]
-                        dist = z2 - z1
-                        if dist < 1e-9: continue
+                    m_cfg['f'] = 0.1 # Default
                         
-                        num_steps = int(np.ceil(dist / dz))
-                        if num_steps < 1: num_steps = 1
-                        steps = np.linspace(z1, z2, num_steps + 1)[1:] 
-                        full_z_list.extend(steps)
-                        
-                    current_z = 0.0
-                    total_steps = len(full_z_list)
-                    
-                    # Initial record at Z=0
-                    for gm in global_monitors:
-                        gm.record(current_field, 0.0)
-                        
-                    for m_wrapper in xy_monitors:
-                        if abs(m_wrapper['z'] - 0.0) < 1e-9:
-                             m_wrapper['monitor'].record(current_field, 0.0)
-                             self.visualize_monitor(m_wrapper['monitor'])
-                    
-                    for i, z in enumerate(full_z_list):
-                        if i == 0 and z == 0.0: continue 
-                        
-                        dist = z - current_z
-                        if dist > 1e-9:
-                            current_field = propagator.propagate(current_field, dist)
-                            current_z = z
-                            
-                        # Modulators
-                        for e in events:
-                            if abs(e['z'] - current_z) < 1e-9:
-                                current_field = self.apply_modulator(current_field, e)
-                        
-                        # Global Monitors
-                        for gm in global_monitors:
-                            gm.record(current_field, current_z)
-                            
-                        # XY Monitors
-                        for m_wrapper in xy_monitors:
-                            if abs(m_wrapper['z'] - current_z) < 1e-9:
-                                mon = m_wrapper['monitor']
-                                mon.record(current_field, current_z)
-                                self.visualize_monitor(mon)
-                                
-                        self.progress_bar.setValue(int((i + 1) / total_steps * 100))
-                        QApplication.processEvents()
-                        
-                    # Finalize global monitors
-                    for gm in global_monitors:
-                        gm.finalize()
-                        self.visualize_monitor(gm)
+                return m_cfg
 
-                self.status_bar.showMessage(f"Simulation complete.")
+            mod1_config = fix_mod_units(mod1_config.copy())
+            mod2_config = fix_mod_units(mod2_config.copy())
+            
+            monitors_config = config.get('monitors', [])
+            
+            # Identify Monitor Types
+            global_monitors = [] # YZ, XZ
+            xy_monitors = [] # XY
                 
-            except Exception as e:
-                self.status_bar.showMessage(f"Error: {str(e)}")
-                print(e)
-                import traceback
-                traceback.print_exc()
-            finally:
-                self.progress_bar.setVisible(False)
+            for m in monitors_config:
+                # m['pos'] is in um or mm. m['plane'] is type.
+                plane_type = m['plane']
+                pos_val = m.get('pos', m.get('z', 0))
+                pos_unit = m.get('pos_unit', 'um')
+                
+                if pos_unit == 'mm':
+                    fixed_val_m = pos_val * 1e-3
+                else:
+                    fixed_val_m = pos_val * 1e-6
+                
+                # Ranges
+                ranges = {}
+                if plane_type == 0: # XY
+                    ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                    ranges['y'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                elif plane_type == 1: # YZ
+                    ranges['y'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                    ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                elif plane_type == 2: # XZ
+                    ranges['x'] = (m.get('range1_min', -1e9)*1e-6, m.get('range1_max', 1e9)*1e-6)
+                    ranges['z'] = (m.get('range2_min', -1e9)*1e-6, m.get('range2_max', 1e9)*1e-6)
+                
+                mon_obj = Monitor(position_z=fixed_val_m if plane_type==0 else 0, # Z for XY
+                                  name=m['name'], 
+                                  plane_type=plane_type,
+                                  fixed_value=fixed_val_m,
+                                  ranges=ranges,
+                                  output_components=m.get('output_components', []))
+                
+                # Store type for visualization
+                mon_obj.data_type = m.get('type', 0)
+                
+                # Print geometry info (Req 3.1)
+                # print(mon_obj.get_geometry_info()) # Monitor might not have this method yet?
+                
+                if plane_type == 0:
+                    xy_monitors.append({'z': fixed_val_m, 'monitor': mon_obj})
+                else:
+                    global_monitors.append(mon_obj)
+                    
+            # Define Z-events (Modulators)
+            events = []
+            events.append({'z': mod1_config['z'], 'type': 'mod1', 'config': mod1_config})
+            events.append({'z': mod2_config['z'], 'type': 'mod2', 'config': mod2_config})
+            
+            # Sort Modulator events
+            events.sort(key=lambda x: x['z'])
+            
+            # Determine Z range
+            max_z = events[-1]['z']
+            if xy_monitors:
+                max_xy = max(m['z'] for m in xy_monitors) # m['z'] here is fixed_val_m (meters)
+                max_z = max(max_z, max_xy)
+                
+            # If max_z is small, default to 1mm
+            if max_z < 1e-6: max_z = 1000e-6
+            
+            # Collect critical Z points
+            z_points = set()
+            z_points.add(0.0)
+            for e in events: z_points.add(e['z'])
+            for m in xy_monitors: z_points.add(m['z'])
+            
+            sorted_z_points = sorted(list(z_points))
+            
+            if not global_monitors:
+                # Fast Event Loop (Only Modulators and XY Monitors)
+                current_z = 0.0
+                total_steps = len(sorted_z_points)
+                
+                # Initial record at Z=0 for XY monitors
+                for m_wrapper in xy_monitors:
+                    if abs(m_wrapper['z'] - 0.0) < 1e-9:
+                        m_wrapper['monitor'].record(current_field, 0.0)
+                        self.visualize_monitor(m_wrapper['monitor'])
+
+                for i, z in enumerate(sorted_z_points):
+                    if i == 0 and z == 0.0: continue
+
+                    if z > current_z:
+                        dist = z - current_z
+                        current_field = propagator.propagate(current_field, dist)
+                        current_z = z
+                        
+                    # Apply events at this Z
+                    for e in events:
+                        if abs(e['z'] - current_z) < 1e-9:
+                            current_field = self.apply_modulator(current_field, e)
+                            
+                    # XY Monitors
+                    for m_wrapper in xy_monitors:
+                        if abs(m_wrapper['z'] - current_z) < 1e-9:
+                            mon = m_wrapper['monitor']
+                            mon.record(current_field, current_z)
+                            self.visualize_monitor(mon)
+                            
+                    self.progress_bar.setValue(int((i + 1) / total_steps * 100))
+                    QApplication.processEvents()
+                    
+            else:
+                # Stepping Mode (Global Monitors active)
+                wavelength = self.grid.wavelength
+                dz = 10 * wavelength 
+                # Ensure at least 200 steps
+                if dz > max_z / 200: dz = max_z / 200
+                
+                # Generate full Z steps including critical points
+                full_z_list = [0.0]
+                for i in range(len(sorted_z_points)-1):
+                    z1 = sorted_z_points[i]
+                    z2 = sorted_z_points[i+1]
+                    dist = z2 - z1
+                    if dist < 1e-9: continue
+                    
+                    num_steps = int(np.ceil(dist / dz))
+                    if num_steps < 1: num_steps = 1
+                    steps = np.linspace(z1, z2, num_steps + 1)[1:] 
+                    full_z_list.extend(steps)
+                    
+                current_z = 0.0
+                total_steps = len(full_z_list)
+                
+                # Initial record at Z=0
+                for gm in global_monitors:
+                    gm.record(current_field, 0.0)
+                    
+                for m_wrapper in xy_monitors:
+                    if abs(m_wrapper['z'] - 0.0) < 1e-9:
+                         m_wrapper['monitor'].record(current_field, 0.0)
+                         self.visualize_monitor(m_wrapper['monitor'])
+                
+                for i, z in enumerate(full_z_list):
+                    if i == 0 and z == 0.0: continue 
+                    
+                    dist = z - current_z
+                    if dist > 1e-9:
+                        current_field = propagator.propagate(current_field, dist)
+                        current_z = z
+                        
+                    # Modulators
+                    for e in events:
+                        if abs(e['z'] - current_z) < 1e-9:
+                            current_field = self.apply_modulator(current_field, e)
+                    
+                    # Global Monitors
+                    for gm in global_monitors:
+                        gm.record(current_field, current_z)
+                        
+                    # XY Monitors
+                    for m_wrapper in xy_monitors:
+                        if abs(m_wrapper['z'] - current_z) < 1e-9:
+                            mon = m_wrapper['monitor']
+                            mon.record(current_field, current_z)
+                            self.visualize_monitor(mon)
+                            
+                    self.progress_bar.setValue(int((i + 1) / total_steps * 100))
+                    QApplication.processEvents()
+                    
+                # Finalize global monitors
+                for gm in global_monitors:
+                    gm.finalize()
+                    self.visualize_monitor(gm)
+
+            self.status_bar.showMessage(f"Simulation complete.")
+            
+        except Exception as e:
+            self.status_bar.showMessage(f"Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Simulation Error", f"An error occurred during simulation:\n{str(e)}")
+        finally:
+            self.progress_bar.setVisible(False)
 
     def apply_modulator(self, field, event):
         config = event['config']
@@ -521,8 +619,13 @@ class MainWindow(QMainWindow):
         type_ = event['type']
         
         # Get source params for polarization angle
-        src_params = self.get_source_params()
-        pol_angle = src_params['linear_angle']
+        # Use config if possible, or fallback to UI read
+        # Since apply_modulator is called during run loop, we can pass pol_angle
+        # But to keep signature simple, let's just read from latest config
+        config_full = self.parameter_panel.get_latest_config()
+        src_cfg = config_full.get('source', {})
+        pol_angle = float(src_cfg.get('linear_angle', 0.0))
+        
         pols = config.get('affected_polarizations', ['unpolarized'])
         
         mod_kwargs = {
@@ -541,7 +644,7 @@ class MainWindow(QMainWindow):
             elif prefix == 'mod2':
                 mod_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase, **mod_kwargs)
                 field = mod_spatial.modulate(field)
-                mod_angle = AngleModulator(self.grid, angle_transmission_curve=None, **mod_kwargs) 
+                mod_angle = AngleModulator(self.grid, angle_transmission_curve=self.parameter_panel.mod2_angle_trans, **mod_kwargs) 
                 return mod_angle.modulate(field)
                 
         elif type_idx == 1: # Ideal Lens
@@ -573,7 +676,17 @@ class MainWindow(QMainWindow):
             y = monitor.grid_x * 1e6 # Vertical: X
             
         # Phase
-        phase = np.angle(field)
+        if field is not None:
+            phase = np.angle(field)
+        elif monitor.component_data:
+            # Fallback to first available component
+            k = next(iter(monitor.component_data))
+            phase = np.angle(monitor.component_data[k])
+        elif intensity is not None:
+            phase = np.zeros_like(intensity)
+        else:
+            print(f"Warning: No valid data for phase calculation in monitor '{name}'")
+            return
         
         # Prepare components for visualization panel
         # monitor.component_data contains {'Ex': ..., 'Ey': ..., 'Ez': ...}

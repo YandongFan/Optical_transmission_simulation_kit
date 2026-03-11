@@ -110,13 +110,25 @@ class Monitor:
         :param field: Current optical field object
         :param current_z: Current Z position of the field
         """
-        # Prepare fields on device
-        fields_gpu = {'Ex': field.Ex, 'Ey': field.Ey}
-        if 'Ez' in self.output_components:
+        # 1. Identify required components
+        # We always need Ex/Ey for Intensity calculation (temporarily), 
+        # plus any explicitly requested components for storage.
+        required_for_storage = set(self.output_components)
+        required_for_calc = {'Ex', 'Ey'} 
+        
+        # 2. Prepare fields on device (only what's needed)
+        fields_gpu = {}
+        
+        # Always fetch Ex/Ey for intensity calculation
+        fields_gpu['Ex'] = field.Ex
+        fields_gpu['Ey'] = field.Ey
+            
+        # Ez requires calculation
+        if 'Ez' in required_for_storage:
             fields_gpu['Ez'] = self._calculate_Ez(field)
             
         if self.plane_type == 0: # XY Plane
-            # Move to CPU numpy
+            # Move to CPU numpy (only what we prepared)
             full_fields = {k: v.cpu().numpy() for k, v in fields_gpu.items()}
             
             x_axis = field.grid.X[0, :]
@@ -125,23 +137,33 @@ class Monitor:
             sl_x, self.grid_x = self._get_slice_indices(x_axis, 'x')
             sl_y, self.grid_y = self._get_slice_indices(y_axis, 'y')
             
-            # Slice and store
+            # Slice and store ONLY requested components
             self.component_data = {}
             for k, v in full_fields.items():
-                sliced = v[sl_y, sl_x]
-                # Always store Ex/Ey if computed, for consistency, or only if requested?
-                # User said: "Default unchecked... If checked, save...".
-                # But we need Ex/Ey for intensity.
-                if k in self.output_components or k in ['Ex', 'Ey']:
-                    self.component_data[k] = sliced
+                if k in self.output_components:
+                    self.component_data[k] = v[sl_y, sl_x]
             
-            # Calculate Intensity
-            ex_data = self.component_data.get('Ex', full_fields['Ex'][sl_y, sl_x])
-            ey_data = self.component_data.get('Ey', full_fields['Ey'][sl_y, sl_x])
-            self.intensity_data = np.abs(ex_data)**2 + np.abs(ey_data)**2
+            # Calculate Intensity using full_fields (which contains Ex/Ey even if not stored)
+            # Handle case where Ex/Ey might be missing if we optimized too much (but we ensured they are in fields_gpu)
+            ex_data = full_fields.get('Ex')
+            ey_data = full_fields.get('Ey')
             
-            # Legacy field_data (use Ex as representative or main polarization)
-            self.field_data = ex_data
+            if ex_data is not None and ey_data is not None:
+                # Slice for intensity
+                ex_slice = ex_data[sl_y, sl_x]
+                ey_slice = ey_data[sl_y, sl_x]
+                self.intensity_data = np.abs(ex_slice)**2 + np.abs(ey_slice)**2
+                
+                # Legacy field_data support: prefer Ex, else Ey, else None
+                # If Ex is not stored in component_data, we shouldn't keep it in field_data to save space?
+                # But visualization might need it.
+                # If user didn't request Ex, field_data should probably be None or empty, 
+                # but existing code might crash. 
+                # Let's set field_data only if Ex is requested, or maybe Intensity is enough for default view.
+                if 'Ex' in self.output_components:
+                    self.field_data = self.component_data['Ex']
+                else:
+                    self.field_data = None 
             
         elif self.plane_type in [1, 2]: # YZ or XZ
             if not self._is_in_range(current_z, 'z'):
@@ -165,7 +187,7 @@ class Monitor:
                 sl_trans, self.grid_x = self._get_slice_indices(x_axis, 'x')
 
             # Extract slices
-            # We need Ex and Ey for intensity, plus any requested
+            # We track Ex/Ey for intensity calculation at finalize, plus requested ones
             comps_to_track = set(self.output_components) | {'Ex', 'Ey'}
             
             for k in comps_to_track:
@@ -191,18 +213,30 @@ class Monitor:
         if self.plane_type in [1, 2]:
             if not self.slice_buffers: return
             
-            # Stack
+            # Stack all tracked buffers
+            temp_data = {}
             for k, buf in self.slice_buffers.items():
                 if not buf: continue
                 # Stack (N_transverse, Nz) -> (N_transverse, Nz)
-                self.component_data[k] = np.array(buf).T
+                temp_data[k] = np.array(buf).T
                 
-            # Intensity
-            Ex = self.component_data.get('Ex')
-            Ey = self.component_data.get('Ey')
+            # Intensity Calculation
+            Ex = temp_data.get('Ex')
+            Ey = temp_data.get('Ey')
             if Ex is not None and Ey is not None:
                 self.intensity_data = np.abs(Ex)**2 + np.abs(Ey)**2
-                self.field_data = Ex # Legacy
+            
+            # Store ONLY requested components in self.component_data
+            self.component_data = {}
+            for k, v in temp_data.items():
+                if k in self.output_components:
+                    self.component_data[k] = v
+            
+            # Legacy field_data
+            if 'Ex' in self.output_components:
+                self.field_data = self.component_data['Ex']
+            else:
+                self.field_data = None
             
             self.slice_buffers = {}
 

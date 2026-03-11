@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QGroupBox,
                              QSpinBox, QLineEdit, QTableWidget, QTableWidgetItem, QTextEdit,
                              QStackedWidget, QHeaderView)
 from PyQt6.QtGui import QAction, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, pyqtSignal as Signal
+from PyQt6.QtCore import Qt, pyqtSignal as Signal, QMutex, QMutexLocker
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
@@ -147,6 +147,26 @@ class ParameterPanel(QWidget):
         button_layout.addWidget(self.btn_run)
         layout.addLayout(button_layout)
         
+        # Simulation Configuration Sync
+        self.config_mutex = QMutex()
+        self.simulation_config = {}
+        # Initial Sync
+        self.sync_source_to_config()
+        
+    def sync_source_to_config(self):
+        """
+        同步UI参数到配置对象 (Sync UI parameters to config object)
+        """
+        with QMutexLocker(self.config_mutex):
+            self.simulation_config = self.get_project_data()
+            
+    def get_latest_config(self):
+        """
+        获取最新的线程安全配置 (Get thread-safe latest config)
+        """
+        with QMutexLocker(self.config_mutex):
+            return self.simulation_config.copy()
+
     def create_grid_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -157,6 +177,11 @@ class ParameterPanel(QWidget):
         self.rb_y = QRadioButton("Y 轴正方向 (+Y)")
         self.rb_z = QRadioButton("Z 轴正方向 (+Z)")
         self.rb_z.setChecked(True)
+        
+        # Sync signals
+        self.rb_x.toggled.connect(self.sync_source_to_config)
+        self.rb_y.toggled.connect(self.sync_source_to_config)
+        self.rb_z.toggled.connect(self.sync_source_to_config)
         
         btn_group = QButtonGroup(self)
         btn_group.addButton(self.rb_x)
@@ -195,6 +220,7 @@ class ParameterPanel(QWidget):
         self.sb_wavelength = QDoubleSpinBox()
         self.sb_wavelength.setRange(0.1, 100)
         self.sb_wavelength.setValue(0.532)
+        self.sb_wavelength.setDecimals(3)
         self.sb_wavelength.setSuffix(" um")
         
         g_layout.addRow("Nx (Grid Points X):", self.sb_nx)
@@ -202,6 +228,13 @@ class ParameterPanel(QWidget):
         g_layout.addRow("dx (Spacing X):", self.sb_dx)
         g_layout.addRow("dy (Spacing Y):", self.sb_dy)
         g_layout.addRow("Wavelength:", self.sb_wavelength)
+        
+        # Sync signals
+        self.sb_nx.valueChanged.connect(self.sync_source_to_config)
+        self.sb_ny.valueChanged.connect(self.sync_source_to_config)
+        self.sb_dx.valueChanged.connect(self.sync_source_to_config)
+        self.sb_dy.valueChanged.connect(self.sync_source_to_config)
+        self.sb_wavelength.valueChanged.connect(self.sync_source_to_config)
         
         grid_group.setLayout(g_layout)
         layout.addWidget(grid_group)
@@ -225,6 +258,7 @@ class ParameterPanel(QWidget):
                                     "拉盖尔-高斯 (Laguerre-Gaussian)", "贝塞尔光束 (Bessel Beam)",
                                     "自定义光源 (Custom Source)"])
         self.combo_source.currentIndexChanged.connect(self.update_source_ui)
+        self.combo_source.currentIndexChanged.connect(self.sync_source_to_config)
         t_layout.addWidget(self.combo_source)
         type_group.setLayout(t_layout)
         layout.addWidget(type_group)
@@ -236,12 +270,14 @@ class ParameterPanel(QWidget):
         self.combo_pol_type = QComboBox()
         self.combo_pol_type.addItems(["线偏振 (Linear)", "左旋圆偏振 (LCP)", "右旋圆偏振 (RCP)", "无偏振 (Unpolarized)"])
         self.combo_pol_type.currentIndexChanged.connect(self.update_pol_ui)
+        self.combo_pol_type.currentIndexChanged.connect(self.sync_source_to_config)
         
         self.sb_pol_angle = QDoubleSpinBox()
         self.sb_pol_angle.setRange(0, 180)
         self.sb_pol_angle.setDecimals(1)
         self.sb_pol_angle.setSuffix(" deg")
         self.sb_pol_angle.setToolTip("线偏振角度 (Linear Polarization Angle, 0-180)")
+        self.sb_pol_angle.valueChanged.connect(self.sync_source_to_config)
         
         pol_layout.addRow("偏振类型 (Type):", self.combo_pol_type)
         pol_layout.addRow("线偏振角度 (Angle):", self.sb_pol_angle)
@@ -260,6 +296,11 @@ class ParameterPanel(QWidget):
         self.sb_z_pos.setSuffix(" um")
         self.cb_normalize = QCheckBox("光源电场归一化 (Normalize E-field)")
         self.cb_normalize.setToolTip("勾选后，将电场最大值归一化为1。")
+        
+        # Sync signals
+        self.sb_amplitude.valueChanged.connect(self.sync_source_to_config)
+        self.sb_z_pos.valueChanged.connect(self.sync_source_to_config)
+        self.cb_normalize.stateChanged.connect(self.sync_source_to_config)
         
         c_layout.addRow("振幅 (Amplitude):", self.sb_amplitude)
         c_layout.addRow("位置 (Z Position):", self.sb_z_pos)
@@ -282,6 +323,7 @@ class ParameterPanel(QWidget):
         self.sb_w0.setRange(0.1, 10000)
         self.sb_w0.setValue(100.0)
         self.sb_w0.setSuffix(" um")
+        self.sb_w0.valueChanged.connect(self.sync_source_to_config)
         pg_layout.addRow("束腰半径 (w0):", self.sb_w0)
         self.source_stack.addWidget(self.page_gaussian)
         
@@ -301,6 +343,10 @@ class ParameterPanel(QWidget):
         self.sb_lg_l.setRange(-50, 50)
         self.sb_lg_l.setValue(1)
         
+        self.sb_lg_w0.valueChanged.connect(self.sync_source_to_config)
+        self.sb_lg_p.valueChanged.connect(self.sync_source_to_config)
+        self.sb_lg_l.valueChanged.connect(self.sync_source_to_config)
+        
         plg_layout.addRow("束腰半径 (w0):", self.sb_lg_w0)
         plg_layout.addRow("径向指数 (p):", self.sb_lg_p)
         plg_layout.addRow("角向指数 (l):", self.sb_lg_l)
@@ -313,6 +359,7 @@ class ParameterPanel(QWidget):
         self.sb_bessel_w0.setRange(0.1, 10000)
         self.sb_bessel_w0.setValue(100.0)
         self.sb_bessel_w0.setSuffix(" um")
+        self.sb_bessel_w0.valueChanged.connect(self.sync_source_to_config)
         pb_layout.addRow("束腰半径 (w0):", self.sb_bessel_w0)
         self.source_stack.addWidget(self.page_bessel)
         
@@ -326,6 +373,7 @@ class ParameterPanel(QWidget):
         self.combo_coord_sys = QComboBox()
         self.combo_coord_sys.addItems(["笛卡尔坐标系 (Cartesian: x, y, z)", "柱坐标系 (Cylindrical: r, phi, z)"])
         self.combo_coord_sys.currentIndexChanged.connect(self.update_custom_help)
+        self.combo_coord_sys.currentIndexChanged.connect(self.sync_source_to_config)
         coord_layout.addWidget(self.combo_coord_sys)
         coord_group.setLayout(coord_layout)
         pc_layout.addWidget(coord_group)
@@ -335,6 +383,7 @@ class ParameterPanel(QWidget):
         self.table_vars = QTableWidget(0, 2)
         self.table_vars.setHorizontalHeaderLabels(["Name", "Value"])
         self.table_vars.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_vars.cellChanged.connect(self.sync_source_to_config)
         pc_layout.addWidget(self.table_vars)
         
         h_layout = QHBoxLayout()
@@ -352,6 +401,7 @@ class ParameterPanel(QWidget):
         self.txt_equation = QTextEdit()
         self.txt_equation.setPlaceholderText("Enter numpy expression...")
         self.txt_equation.setMaximumHeight(100)
+        self.txt_equation.textChanged.connect(self.sync_source_to_config)
         pc_layout.addWidget(self.txt_equation)
         
         self.source_stack.addWidget(self.page_custom)
@@ -577,6 +627,11 @@ class ParameterPanel(QWidget):
         
         sb_NA.valueChanged.connect(update_f)
         
+        # Connect to sync
+        sb_D.valueChanged.connect(self.sync_source_to_config)
+        sb_f.valueChanged.connect(self.sync_source_to_config)
+        sb_NA.valueChanged.connect(self.sync_source_to_config)
+        
         pl_layout.addRow("直径 D (Diameter):", w_D)
         pl_layout.addRow("焦距 f (Focal Length):", w_f)
         pl_layout.addRow("数值孔径 NA:", sb_NA)
@@ -591,6 +646,7 @@ class ParameterPanel(QWidget):
         setattr(self, f"sb_{prefix}_NA", sb_NA)
         
         combo.currentIndexChanged.connect(lambda idx: stack.setCurrentIndex(0 if idx == 0 else 1))
+        combo.currentIndexChanged.connect(self.sync_source_to_config)
         
         layout.addWidget(stack)
         setattr(self, f"stack_{prefix}", stack)
@@ -604,6 +660,12 @@ class ParameterPanel(QWidget):
         cb_rcp = QCheckBox("右旋圆偏振 (RCP)")
         cb_unpol = QCheckBox("无偏振 (Unpolarized)")
         cb_unpol.setChecked(True) # Default
+        
+        # Connect sync
+        cb_lin.stateChanged.connect(self.sync_source_to_config)
+        cb_lcp.stateChanged.connect(self.sync_source_to_config)
+        cb_rcp.stateChanged.connect(self.sync_source_to_config)
+        cb_unpol.stateChanged.connect(self.sync_source_to_config)
         
         pol_layout.addWidget(cb_lin)
         pol_layout.addWidget(cb_lcp)
@@ -774,6 +836,11 @@ class ParameterPanel(QWidget):
         self.cb_mon_ex.stateChanged.connect(self.update_current_monitor)
         self.cb_mon_ey.stateChanged.connect(self.update_current_monitor)
         self.cb_mon_ez.stateChanged.connect(self.update_current_monitor)
+        
+        # Also connect to sync config!
+        self.cb_mon_ex.stateChanged.connect(self.sync_source_to_config)
+        self.cb_mon_ey.stateChanged.connect(self.sync_source_to_config)
+        self.cb_mon_ez.stateChanged.connect(self.sync_source_to_config)
         
         self.btn_export_data = QPushButton("导出监视器数据 (Export Data)")
         self.btn_export_data.clicked.connect(self.export_monitor_data)

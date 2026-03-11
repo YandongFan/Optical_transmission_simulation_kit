@@ -9,6 +9,8 @@
     },
     "source": {
         "type_idx": 2,
+        "polarization_type": 0,
+        "linear_angle": 0.0,
         "amplitude": 1.0,
         "z_pos": 0.0,
         "normalize": true,
@@ -24,15 +26,18 @@
         }
     },
     "mod1": {
-        "z": 10000.0,
+        "z": 100.0,
         "z_unit": "um",
-        "type_idx": 0,
+        "type_idx": 1,
+        "affected_polarizations": [
+            "linear_x"
+        ],
         "lens": {
-            "D": 25400.0,
+            "D": 100.0,
             "D_unit": "um",
-            "f": 100000.0,
+            "f": 100.0,
             "f_unit": "um",
-            "NA": 0.13
+            "NA": 0.5
         },
         "phase_path": null,
         "amp_path": null
@@ -41,6 +46,9 @@
         "z": 20000.0,
         "z_unit": "um",
         "type_idx": 0,
+        "affected_polarizations": [
+            "unpolarized"
+        ],
         "lens": {
             "D": 25400.0,
             "D_unit": "um",
@@ -55,24 +63,18 @@
         {
             "name": "Monitor 1",
             "z": 0.0,
-            "plane": 1,
-            "type": 1,
             "pos": 0.0,
-            "range1_min": -50.0,
-            "range1_max": 50.0,
-            "range2_min": -50.0,
-            "range2_max": 50.0
-        },
-        {
-            "name": "Monitor 2",
-            "z": 0.0,
-            "plane": 2,
+            "pos_unit": "mm",
+            "plane": 0,
             "type": 0,
-            "pos": 0.0,
-            "range1_min": -50.0,
-            "range1_max": 50.0,
-            "range2_min": -50.0,
-            "range2_max": 50.0
+            "output_components": [
+                "Ex",
+                "Ey"
+            ],
+            "range1_min": -1000.0,
+            "range1_max": 1000.0,
+            "range2_min": -1000.0,
+            "range2_max": 1000.0
         }
     ],
     "version": "1.0"
