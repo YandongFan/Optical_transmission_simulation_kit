@@ -1,0 +1,137 @@
+{
+    "grid": {
+        "direction": "z",
+        "nx": 512.0,
+        "ny": 512.0,
+        "dx": 0.2,
+        "dy": 0.2,
+        "wavelength": 0.633
+    },
+    "source": {
+        "type_idx": 2,
+        "polarization_type": 1,
+        "linear_angle": 0.0,
+        "amplitude": 1.0,
+        "z_pos": 0.0,
+        "normalize": true,
+        "w0": 100.0,
+        "lg_w0": 10.0,
+        "lg_p": 0,
+        "lg_l": 4,
+        "bessel_w0": 100.0,
+        "custom": {
+            "coord_sys": 0,
+            "equation": "",
+            "variables": []
+        }
+    },
+    "mod1": {
+        "z": 10000.0,
+        "z_unit": "um",
+        "type_idx": 0,
+        "affected_polarizations": [
+            "unpolarized"
+        ],
+        "lens": {
+            "D": 25400.0,
+            "D_unit": "um",
+            "f": 100000.0,
+            "f_unit": "um",
+            "NA": 0.13
+        },
+        "phase_path": null,
+        "amp_path": null,
+        "custom_mask": {
+            "mode": 0,
+            "trans_formula": "",
+            "phase_formula": "",
+            "trans_vars": {},
+            "phase_vars": {},
+            "shape_type": 0,
+            "ann_r_in": 0.0,
+            "ann_r_out": 100.0,
+            "ann_cx": 0.0,
+            "ann_cy": 0.0,
+            "ann_trans": 1.0,
+            "cir_r": 100.0,
+            "cir_cx": 0.0,
+            "cir_cy": 0.0,
+            "cir_trans": 1.0,
+            "rect_w": 200.0,
+            "rect_h": 200.0,
+            "rect_cx": 0.0,
+            "rect_cy": 0.0,
+            "rect_rot": 0.0,
+            "rect_trans": 1.0
+        }
+    },
+    "mod2": {
+        "z": 20000.0,
+        "z_unit": "um",
+        "type_idx": 0,
+        "affected_polarizations": [
+            "unpolarized"
+        ],
+        "lens": {
+            "D": 25400.0,
+            "D_unit": "um",
+            "f": 100000.0,
+            "f_unit": "um",
+            "NA": 0.13
+        },
+        "phase_path": null,
+        "angle_path": null,
+        "custom_mask": {
+            "mode": 2,
+            "trans_formula": "",
+            "phase_formula": "",
+            "trans_vars": {},
+            "phase_vars": {},
+            "shape_type": 0,
+            "ann_r_in": 0.0,
+            "ann_r_out": 100.0,
+            "ann_cx": 0.0,
+            "ann_cy": 0.0,
+            "ann_trans": 1.0,
+            "cir_r": 100.0,
+            "cir_cx": 0.0,
+            "cir_cy": 0.0,
+            "cir_trans": 1.0,
+            "rect_w": 200.0,
+            "rect_h": 200.0,
+            "rect_cx": 0.0,
+            "rect_cy": 0.0,
+            "rect_rot": 0.0,
+            "rect_trans": 1.0
+        }
+    },
+    "monitors": [
+        {
+            "name": "Monitor 1",
+            "z": 200.0,
+            "pos": 200.0,
+            "pos_unit": "um",
+            "plane": 0,
+            "type": 0,
+            "output_components": [],
+            "range1_min": -50.0,
+            "range1_max": 50.0,
+            "range2_min": -50.0,
+            "range2_max": 50.0
+        },
+        {
+            "name": "Monitor 2",
+            "z": 0.0,
+            "pos": 0.0,
+            "pos_unit": "mm",
+            "plane": 1,
+            "type": 0,
+            "output_components": [],
+            "range1_min": -50.0,
+            "range1_max": 50.0,
+            "range2_min": 0.0,
+            "range2_max": 300.0
+        }
+    ],
+    "version": "1.0"
+}

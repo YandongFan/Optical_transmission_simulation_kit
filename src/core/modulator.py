@@ -2,6 +2,66 @@ import torch
 import numpy as np
 from .field import OpticalField
 
+def evaluate_formula(formula, custom_vars, x, y, wavelength):
+    """
+    Evaluates a mathematical formula string using numpy.
+    Supports '^' for power operation (replaced with '**').
+    """
+    if not formula:
+        return None
+        
+    # Preprocess formula: Replace '^' with '**' for power operation
+    # This is common in scientific notation and avoids bitwise XOR errors
+    formula = formula.replace('^', '**')
+        
+    # Context
+    context = {
+        'np': np,
+        'x': x,
+        'y': y,
+        'lambda': wavelength,
+        'pi': np.pi,
+        'sqrt': np.sqrt,
+        'exp': np.exp,
+        'sin': np.sin,
+        'cos': np.cos,
+        'abs': np.abs,
+        'theta': np.arctan2(y, x),
+        'phi': np.arctan2(y, x),
+        'r': np.sqrt(x**2 + y**2)
+    }
+    if custom_vars:
+        context.update(custom_vars)
+        
+    try:
+        # Compile first to catch syntax errors cleanly
+        code = compile(formula, "<string>", "eval")
+        res = eval(code, {"__builtins__": {}}, context)
+        
+        # Ensure result is numpy array
+        if np.isscalar(res):
+            res = np.full_like(x, res)
+        elif not isinstance(res, np.ndarray):
+            # Try to convert list/tuple to array
+            res = np.array(res)
+            # If shape mismatch, might fail later, but at least it's an array
+            
+        # Handle NaN and Inf to prevent crashes in visualization
+        if np.any(np.isnan(res)) or np.any(np.isinf(res)):
+            # print(f"Warning: Formula result contains NaN or Inf")
+            # We don't want to crash or return None if only some pixels are bad
+            # Replace NaN with 0, Inf with large number?
+            # For visualization, it's better to clip or replace.
+            res = np.nan_to_num(res, nan=0.0, posinf=1e10, neginf=-1e10)
+            
+        return res
+    except SyntaxError:
+        # Common during typing (e.g. "x *")
+        return None
+    except Exception as e:
+        print(f"Formula evaluation error: {e}")
+        return None
+
 class Modulator:
     """
     调制器基类 (Modulator Base Class)
@@ -103,11 +163,26 @@ class SpatialModulator(Modulator):
     空间调制器 (Spatial Modulator)
     支持相位和振幅调制 (Supports phase and amplitude modulation)
     """
-    def __init__(self, grid, amplitude_mask=None, phase_mask=None, **kwargs):
+    def __init__(self, grid, amplitude_mask=None, phase_mask=None, 
+                 transFormula=None, phaseFormula=None, customVars=None, **kwargs):
         super().__init__(grid, **kwargs)
         self.amplitude_mask = amplitude_mask
         self.phase_mask = phase_mask
+        self.transFormula = transFormula
+        self.phaseFormula = phaseFormula
+        self.customVars = customVars if customVars else {}
         
+    def setCustomFormula(self, type_, formula):
+        if type_ == 'trans':
+            self.transFormula = formula
+        elif type_ == 'phase':
+            self.phaseFormula = formula
+        return True
+        
+    def getCustomValue(self, type_, x, y, lambda_, **kwargs):
+        formula = self.transFormula if type_ == 'trans' else self.phaseFormula
+        return evaluate_formula(formula, self.customVars, x, y, lambda_)
+
     def set_amplitude(self, mask):
         """
         设置振幅掩膜 (Set amplitude mask)
@@ -130,6 +205,24 @@ class SpatialModulator(Modulator):
         
         # Prepare modulation tensor
         T = torch.ones((self.grid.ny, self.grid.nx), dtype=torch.complex64, device=device)
+        
+        # Check Formula if mask is None
+        # Convert to microns for formula evaluation (User expects um)
+        X_um = self.grid.X * 1e6
+        Y_um = self.grid.Y * 1e6
+        lam_um = self.grid.wavelength * 1e6
+        
+        if self.amplitude_mask is None and self.transFormula:
+            res = evaluate_formula(self.transFormula, self.customVars, 
+                                   X_um, Y_um, lam_um)
+            if res is not None:
+                self.amplitude_mask = np.clip(res, 0, 1)
+
+        if self.phase_mask is None and self.phaseFormula:
+            res = evaluate_formula(self.phaseFormula, self.customVars,
+                                   X_um, Y_um, lam_um)
+            if res is not None:
+                self.phase_mask = res
         
         if self.amplitude_mask is not None:
             amp = torch.from_numpy(self.amplitude_mask).to(device)

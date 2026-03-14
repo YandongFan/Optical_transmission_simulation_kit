@@ -15,6 +15,7 @@ from src.core.source import PlaneWave, GaussianBeam, LaguerreGaussianBeam, Custo
 from src.core.propagator import AngularSpectrumPropagator
 from src.core.modulator import SpatialModulator, AngleModulator, IdealLens, CylindricalLens
 from src.core.monitor import Monitor
+from src.utils.mask_generator import generate_annular_mask, generate_circular_mask, generate_rectangular_mask, generate_polygon_mask
 
 class MainWindow(QMainWindow):
     """
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         # Simulation State
         self.field = None
         self.grid = None
+        self.source_preview_data = None
         self.device = 'cuda' if np.isin('cuda', [1]) else 'cpu' # Simple check, or default to cpu
         import torch
         if torch.cuda.is_available():
@@ -298,6 +300,16 @@ class MainWindow(QMainWindow):
             
             self.visualization_panel.add_monitor_result("Source Preview", self.field.to_numpy(), 
                                                         intensity, phase, x_um, y_um, components=components)
+            
+            # Save for later injection
+            self.source_preview_data = {
+                'field': self.field.to_numpy(),
+                'intensity': intensity,
+                'phase': phase,
+                'x': x_um,
+                'y': y_um,
+                'components': components
+            }
                                                         
             self.status_bar.showMessage("Preview updated.")
             
@@ -603,6 +615,16 @@ class MainWindow(QMainWindow):
                     gm.finalize()
                     self.visualize_monitor(gm)
 
+            # Inject Source Preview
+            if self.source_preview_data:
+                d = self.source_preview_data
+                self.visualization_panel.add_monitor_result("Source Preview", 
+                                                            d['field'], d['intensity'], d['phase'], d['x'], d['y'], 
+                                                            components=d['components'], enabled=True)
+            else:
+                self.visualization_panel.add_monitor_result("Source Preview", 
+                                                            None, None, None, None, None, enabled=False)
+
             self.status_bar.showMessage(f"Simulation complete.")
             
         except Exception as e:
@@ -612,6 +634,50 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Simulation Error", f"An error occurred during simulation:\n{str(e)}")
         finally:
             self.progress_bar.setVisible(False)
+
+    def generate_geom_mask(self, prefix, c_type):
+        """
+        Generate mask from geometric params
+        """
+        pp = self.parameter_panel
+        id_p = f"{prefix}_{c_type}"
+        shape_idx = getattr(pp, f"combo_shape_{id_p}").currentIndex()
+        
+        X_um = self.grid.X * 1e6
+        Y_um = self.grid.Y * 1e6
+        
+        mask = None
+        
+        if shape_idx == 0: # Annular
+            r_in = getattr(pp, f"sb_ann_r_in_{id_p}").value()
+            r_out = getattr(pp, f"sb_ann_r_out_{id_p}").value()
+            cx = getattr(pp, f"sb_ann_cx_{id_p}").value()
+            cy = getattr(pp, f"sb_ann_cy_{id_p}").value()
+            val = getattr(pp, f"sb_ann_val_{id_p}").value()
+            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val)
+            
+        elif shape_idx == 1: # Circle
+            r = getattr(pp, f"sb_cir_r_{id_p}").value()
+            cx = getattr(pp, f"sb_cir_cx_{id_p}").value()
+            cy = getattr(pp, f"sb_cir_cy_{id_p}").value()
+            val = getattr(pp, f"sb_cir_val_{id_p}").value()
+            mask = generate_circular_mask(X_um, Y_um, cx, cy, r, val)
+            
+        elif shape_idx == 2: # Rectangle
+            w = getattr(pp, f"sb_rect_w_{id_p}").value()
+            h = getattr(pp, f"sb_rect_h_{id_p}").value()
+            cx = getattr(pp, f"sb_rect_cx_{id_p}").value()
+            cy = getattr(pp, f"sb_rect_cy_{id_p}").value()
+            rot = getattr(pp, f"sb_rect_rot_{id_p}").value()
+            val = getattr(pp, f"sb_rect_val_{id_p}").value()
+            mask = generate_rectangular_mask(X_um, Y_um, cx, cy, w, h, rot, val)
+            
+        elif shape_idx == 3: # Polygon
+            verts = getattr(pp, f"poly_editor_{id_p}").get_vertices()
+            val = getattr(pp, f"sb_poly_val_{id_p}").value()
+            mask = generate_polygon_mask(X_um, Y_um, verts, val)
+            
+        return mask
 
     def apply_modulator(self, field, event):
         config = event['config']
@@ -635,16 +701,61 @@ class MainWindow(QMainWindow):
         
         if type_idx == 0: # Custom Mask
             prefix = type_
+            
+            # Masks
+            amp_mask = None
+            phase_mask = None
+            trans_formula = None
+            phase_formula = None
+            custom_vars = {}
+            
+            pp = self.parameter_panel
+            if hasattr(pp, f"mask_tabs_{prefix}"):
+                tabs = getattr(pp, f"mask_tabs_{prefix}")
+                mode = tabs.currentIndex()
+                
+                if mode == 0: # File Import
+                    amp_mask = getattr(pp, f"{prefix}_amp", None)
+                    phase_mask = getattr(pp, f"{prefix}_phase", None)
+                    
+                elif mode == 1: # Param Definition
+                    # Transmission
+                    t_mode = getattr(pp, f"combo_trans_mode_{prefix}").currentIndex()
+                    if t_mode == 0: # Formula
+                        trans_formula = getattr(pp, f"fw_trans_{prefix}").get_formula()
+                        custom_vars.update(getattr(pp, f"fw_trans_{prefix}").custom_vars)
+                    else: # Geometric
+                        amp_mask = self.generate_geom_mask(prefix, 'trans')
+                        
+                    # Phase
+                    p_mode = getattr(pp, f"combo_phase_mode_{prefix}").currentIndex()
+                    if p_mode == 0: # Formula
+                        phase_formula = getattr(pp, f"fw_phase_{prefix}").get_formula()
+                        custom_vars.update(getattr(pp, f"fw_phase_{prefix}").custom_vars)
+                    else: # Geometric
+                        phase_mask = self.generate_geom_mask(prefix, 'phase')
+
             if prefix == 'mod1':
                 mod = SpatialModulator(self.grid, 
-                                        amplitude_mask=self.parameter_panel.mod1_amp,
-                                        phase_mask=self.parameter_panel.mod1_phase,
+                                        amplitude_mask=amp_mask,
+                                        phase_mask=phase_mask,
+                                        transFormula=trans_formula,
+                                        phaseFormula=phase_formula,
+                                        customVars=custom_vars,
                                         **mod_kwargs)
                 return mod.modulate(field)
             elif prefix == 'mod2':
-                mod_spatial = SpatialModulator(self.grid, phase_mask=self.parameter_panel.mod2_phase, **mod_kwargs)
+                # Apply Spatial Modulation
+                mod_spatial = SpatialModulator(self.grid, 
+                                               amplitude_mask=amp_mask,
+                                               phase_mask=phase_mask, 
+                                               transFormula=trans_formula,
+                                               phaseFormula=phase_formula,
+                                               customVars=custom_vars,
+                                               **mod_kwargs)
                 field = mod_spatial.modulate(field)
-                mod_angle = AngleModulator(self.grid, angle_transmission_curve=self.parameter_panel.mod2_angle_trans, **mod_kwargs) 
+                
+                mod_angle = AngleModulator(self.grid, angle_transmission_curve=pp.mod2_angle_trans, **mod_kwargs) 
                 return mod_angle.modulate(field)
                 
         elif type_idx == 1: # Ideal Lens
@@ -693,4 +804,5 @@ class MainWindow(QMainWindow):
         # We need to pass this dictionary to visualization panel
         
         self.visualization_panel.add_monitor_result(name, field, intensity, phase, x, y, 
-                                                    components=monitor.component_data)
+                                                    components=monitor.component_data,
+                                                    plane_type=monitor.plane_type)

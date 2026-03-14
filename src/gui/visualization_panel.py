@@ -1,4 +1,5 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy, QComboBox, QLabel, QHBoxLayout, QMessageBox, QFileDialog)
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy, QComboBox, QLabel, QHBoxLayout, QMessageBox, QFileDialog, QListWidget, QGroupBox, QPushButton, QDialog)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
@@ -15,16 +16,35 @@ class VisualizationPanel(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         
-        # 监视器选择 (Monitor Selection)
-        mon_layout = QHBoxLayout()
-        mon_layout.addWidget(QLabel("选择监视器 (Select Monitor):"))
-        self.combo_monitors = QComboBox()
-        self.combo_monitors.currentIndexChanged.connect(self.on_monitor_changed)
-        mon_layout.addWidget(self.combo_monitors)
-        layout.addLayout(mon_layout)
+        # 监视器列表 (Monitor List)
+        mon_group = QGroupBox("监视器列表 (Monitor List)")
+        mon_layout = QHBoxLayout(mon_group)
+        
+        self.list_monitors = QListWidget() # Replaces combo_monitors
+        self.list_monitors.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list_monitors.itemDoubleClicked.connect(self.on_monitor_double_clicked)
+        self.list_monitors.itemSelectionChanged.connect(self.on_monitor_selection_changed)
+        self.list_monitors.setFixedHeight(120) # Limit height
+        mon_layout.addWidget(self.list_monitors)
+        
+        btn_layout = QVBoxLayout()
+        self.btn_view = QPushButton("查看 (View)")
+        self.btn_view.clicked.connect(self.view_monitor_floating)
+        self.btn_compare = QPushButton("对比 (Compare)")
+        self.btn_compare.clicked.connect(self.compare_monitors)
+        self.btn_export = QPushButton("导出 (Export)")
+        self.btn_export.clicked.connect(self.export_current_monitor)
+        
+        btn_layout.addWidget(self.btn_view)
+        btn_layout.addWidget(self.btn_compare)
+        btn_layout.addWidget(self.btn_export)
+        btn_layout.addStretch()
+        mon_layout.addLayout(btn_layout)
+        
+        layout.addWidget(mon_group)
         
         # 数据存储 (Data storage)
-        self.monitor_data = {} # {monitor_name: {'field': ..., 'intensity': ..., 'phase': ..., 'x': ..., 'y': ...}}
+        self.monitor_data = {} # {monitor_name: {...}}
         self.current_aspect_mode = 'default' # 'default', 'square', 'image'
         
         # 显示控制 (Display Control)
@@ -64,7 +84,7 @@ class VisualizationPanel(QWidget):
         if 0 <= index < len(modes):
             self.current_aspect_mode = modes[index]
             # 触发当前监视器的重绘
-            self.on_monitor_changed(self.combo_monitors.currentIndex())
+            self.on_monitor_selection_changed()
             
         elapsed = (time.time() - start_time) * 1000
         # 打印耗时以验证性能要求 (< 200ms)
@@ -75,7 +95,7 @@ class VisualizationPanel(QWidget):
         清空所有数据
         """
         self.monitor_data = {}
-        self.combo_monitors.clear()
+        self.list_monitors.clear()
         self.intensity_canvas.clear()
         self.phase_canvas.clear()
         self.cross_section_canvas.clear()
@@ -83,10 +103,10 @@ class VisualizationPanel(QWidget):
         while self.tabs.count() > 3:
             self.tabs.removeTab(3)
 
-    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, components=None):
+    def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, components=None, plane_type=0, enabled=True):
         """
         添加监视器结果数据
-        :param components: 分量字典 {'Ex': data, 'Ey': data, 'Ez': data}
+        :param enabled: 是否启用 (用于 Source Preview 无数据时)
         """
         self.monitor_data[name] = {
             'field': field_data,
@@ -94,30 +114,149 @@ class VisualizationPanel(QWidget):
             'phase': phase_data,
             'x': x,
             'y': y,
-            'components': components if components else {}
+            'components': components if components else {},
+            'plane_type': plane_type,
+            'enabled': enabled
         }
         
-        # 如果不存在则添加到下拉框
-        if self.combo_monitors.findText(name) == -1:
-            self.combo_monitors.addItem(name)
+        # Check if exists
+        items = self.list_monitors.findItems(name, Qt.MatchFlag.MatchExactly)
+        if not items:
+            self.list_monitors.addItem(name)
+            item = self.list_monitors.findItems(name, Qt.MatchFlag.MatchExactly)[0]
+        else:
+            item = items[0]
             
-        # 如果是当前选中项或第一项，则更新视图
-        if self.combo_monitors.currentText() == name:
-            self.on_monitor_changed(self.combo_monitors.currentIndex())
-        elif self.combo_monitors.count() == 1:
-            self.on_monitor_changed(0)
+        if not enabled:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setToolTip("无可用光源预览数据 (No available source preview data)")
+        else:
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+            item.setToolTip("")
 
-    def on_monitor_changed(self, index):
+        # Select if first
+        if self.list_monitors.count() == 1 and enabled:
+            self.list_monitors.setCurrentRow(0)
+
+    def on_monitor_selection_changed(self):
         """
         切换显示的监视器数据
         """
-        name = self.combo_monitors.currentText()
+        items = self.list_monitors.selectedItems()
+        if not items: return
+        
+        name = items[-1].text()
         if name in self.monitor_data:
             data = self.monitor_data[name]
+            if not data.get('enabled', True): return
+            
             self.update_plots(data['field'], data['intensity'], data['phase'], data['x'], data['y'], 
-                              data.get('components'))
+                              data.get('components'), data.get('plane_type', 0))
 
-    def update_plots(self, field_data, intensity_data, phase_data, x, y, components=None):
+    def on_monitor_double_clicked(self, item):
+        self.view_monitor_floating()
+
+    def view_monitor_floating(self):
+        items = self.list_monitors.selectedItems()
+        if not items: return
+        name = items[-1].text()
+        
+        if name in self.monitor_data:
+            data = self.monitor_data[name]
+            if not data.get('enabled', True): return
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Monitor View: {name}")
+            dialog.resize(800, 600)
+            layout = QVBoxLayout(dialog)
+            
+            tabs = QTabWidget()
+            
+            def create_tab(title, data_arr, cmap='viridis', is_line=False):
+                canvas = PlotCanvas(dialog)
+                if is_line:
+                    mid = data_arr.shape[0] // 2
+                    if data['x'].ndim == 2:
+                        x_line = data['x'][mid, :]
+                    else:
+                        x_line = data['x']
+                    canvas.plot_line(x_line, data_arr[mid, :], title, "x (um)", "Intensity")
+                else:
+                    self.plot_heatmap_on_canvas(canvas, data_arr, data['x'], data['y'], title, cmap=cmap, mode=self.current_aspect_mode)
+                tabs.addTab(canvas, title)
+                
+            create_tab("Intensity", data['intensity'])
+            create_tab("Phase", data['phase'], cmap='hsv')
+            create_tab("Cross Section", data['intensity'], is_line=True)
+            
+            layout.addWidget(tabs)
+            
+            btn_export = QPushButton("导出 PNG/CSV (Export)")
+            btn_export.clicked.connect(lambda: self.export_data(name)) 
+            layout.addWidget(btn_export)
+            
+            dialog.show() 
+
+    def compare_monitors(self):
+        items = self.list_monitors.selectedItems()
+        if len(items) != 2:
+            QMessageBox.warning(self, "Selection", "请选择两个监视器进行对比 (Please select exactly 2 monitors).")
+            return
+            
+        name1 = items[0].text()
+        name2 = items[1].text()
+        
+        d1 = self.monitor_data.get(name1)
+        d2 = self.monitor_data.get(name2)
+        
+        if not d1 or not d2: return
+        
+        if d1['intensity'].shape != d2['intensity'].shape:
+             QMessageBox.warning(self, "Mismatch", "Dimensions mismatch.")
+             return
+             
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Comparison: {name1} vs {name2}")
+        dialog.resize(1000, 600)
+        layout = QVBoxLayout(dialog)
+        
+        tabs = QTabWidget()
+        
+        # Side-by-Side
+        w_sbs = QWidget()
+        l_sbs = QHBoxLayout(w_sbs)
+        
+        c1 = PlotCanvas(dialog)
+        self.plot_heatmap_on_canvas(c1, d1['intensity'], d1['x'], d1['y'], f"{name1}", mode=self.current_aspect_mode)
+        l_sbs.addWidget(c1)
+        
+        c2 = PlotCanvas(dialog)
+        self.plot_heatmap_on_canvas(c2, d2['intensity'], d2['x'], d2['y'], f"{name2}", mode=self.current_aspect_mode)
+        l_sbs.addWidget(c2)
+        
+        tabs.addTab(w_sbs, "并排 (Side-by-Side)")
+        
+        # Difference
+        c_diff = PlotCanvas(dialog)
+        diff = d1['intensity'] - d2['intensity']
+        self.plot_heatmap_on_canvas(c_diff, diff, d1['x'], d1['y'], f"Diff ({name1}-{name2})", cmap='coolwarm', mode=self.current_aspect_mode)
+        tabs.addTab(c_diff, "差值 (Difference)")
+        
+        layout.addWidget(tabs)
+        dialog.show()
+
+    def export_current_monitor(self):
+        items = self.list_monitors.selectedItems()
+        if items: self.export_data(items[-1].text())
+
+    def plot_heatmap_on_canvas(self, canvas, data, x, y, title, xlabel="x (um)", ylabel="y (um)", cmap='viridis', mode='default'):
+        if x.ndim == 2:
+            extent = [x.min(), x.max(), y.min(), y.max()]
+        else:
+            extent = [x[0], x[-1], y[0], y[-1]]
+        canvas.plot_heatmap(data, extent, title, xlabel, ylabel, cmap, mode)
+
+    def update_plots(self, field_data, intensity_data, phase_data, x, y, components=None, plane_type=0):
         """
         更新所有绘图区域
         """
@@ -127,9 +266,18 @@ class VisualizationPanel(QWidget):
         else:
             extent = [x[0], x[-1], y[0], y[-1]]
             
+        # Determine labels based on plane type
+        xlabel, ylabel = "x (um)", "y (um)"
+        if plane_type == 1: # YZ -> Horizontal Z, Vertical Y
+            xlabel, ylabel = "z (um)", "y (um)"
+        elif plane_type == 2: # XZ -> Horizontal Z, Vertical X
+            xlabel, ylabel = "z (um)", "x (um)"
+            
         # 更新主标签页
-        self.intensity_canvas.plot_heatmap(intensity_data, extent, "Total Intensity (|E|^2)", mode=self.current_aspect_mode)
-        self.phase_canvas.plot_heatmap(phase_data, extent, "Phase (rad)", cmap='hsv', mode=self.current_aspect_mode)
+        self.intensity_canvas.plot_heatmap(intensity_data, extent, "Total Intensity (|E|^2)", 
+                                           xlabel=xlabel, ylabel=ylabel, mode=self.current_aspect_mode)
+        self.phase_canvas.plot_heatmap(phase_data, extent, "Phase (rad)", cmap='hsv', 
+                                       xlabel=xlabel, ylabel=ylabel, mode=self.current_aspect_mode)
         
         # 更新截面图
         mid_row = intensity_data.shape[0] // 2
@@ -140,7 +288,7 @@ class VisualizationPanel(QWidget):
         
         y_label_val = y.mean() if hasattr(y, 'mean') else y[mid_row]
         self.cross_section_canvas.plot_line(x_line, intensity_data[mid_row, :], 
-                                          f"Cross Section (y={y_label_val:.2f} um)", "x (um)", "Intensity")
+                                          f"Cross Section ({ylabel.split(' ')[0]}={y_label_val:.2f})", xlabel, "Intensity")
 
         # 处理分量显示 (Ex, Ey, Ez)
         # 移除现有的分量标签页 (索引 > 2)
@@ -162,6 +310,7 @@ class VisualizationPanel(QWidget):
                 comp_canvas.plot_dual_heatmap(
                     comp_int, comp_phase, extent, 
                     f"|{comp_name}|^2", f"Arg({comp_name})",
+                    xlabel=xlabel, ylabel=ylabel,
                     cmap1='viridis', cmap2='hsv',
                     mode=self.current_aspect_mode
                 )
@@ -229,7 +378,7 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
-    def plot_heatmap(self, data, extent, title, cmap='viridis', mode='default'):
+    def plot_heatmap(self, data, extent, title, xlabel="x (um)", ylabel="y (um)", cmap='viridis', mode='default'):
         """
         绘制热图 (Intensity/Phase)
         """
@@ -237,8 +386,8 @@ class PlotCanvas(FigureCanvas):
         ax = self.fig.add_subplot(111)
         im = ax.imshow(data, extent=extent, origin='lower', cmap=cmap, aspect='auto')
         ax.set_title(title)
-        ax.set_xlabel('x (um)')
-        ax.set_ylabel('y (um)')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         
         if mode == 'square': # Axis Square (MATLAB style)
             # 强制坐标轴框为正方形，并确保物理 1:1 比例
@@ -271,7 +420,7 @@ class PlotCanvas(FigureCanvas):
         self.fig.tight_layout()
         self.draw()
 
-    def plot_dual_heatmap(self, data1, data2, extent, title1, title2, cmap1='viridis', cmap2='hsv', mode='default'):
+    def plot_dual_heatmap(self, data1, data2, extent, title1, title2, xlabel="x (um)", ylabel="y (um)", cmap1='viridis', cmap2='hsv', mode='default'):
         """
         绘制双热图 (用于分量显示)
         """
@@ -281,16 +430,16 @@ class PlotCanvas(FigureCanvas):
         ax1 = self.fig.add_subplot(121)
         im1 = ax1.imshow(data1, extent=extent, origin='lower', cmap=cmap1, aspect='auto')
         ax1.set_title(title1)
-        ax1.set_xlabel('x (um)')
-        ax1.set_ylabel('y (um)')
+        ax1.set_xlabel(xlabel)
+        ax1.set_ylabel(ylabel)
         self.fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
         
         # Subplot 2
         ax2 = self.fig.add_subplot(122)
         im2 = ax2.imshow(data2, extent=extent, origin='lower', cmap=cmap2, aspect='auto')
         ax2.set_title(title2)
-        ax2.set_xlabel('x (um)')
-        ax2.set_ylabel('y (um)')
+        ax2.set_xlabel(xlabel)
+        ax2.set_ylabel(ylabel)
         self.fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
         
         # 应用显示模式

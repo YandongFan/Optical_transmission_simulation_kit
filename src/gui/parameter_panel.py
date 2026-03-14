@@ -12,6 +12,8 @@ from scipy.io import loadmat
 import os
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from .formula_widget import FormulaWidget
+from .polygon_widget import PolygonEditorWidget
 
 class EquationDisplay(FigureCanvas):
     def __init__(self, parent=None, width=5, height=1, dpi=100):
@@ -450,10 +452,16 @@ class ParameterPanel(QWidget):
             self.update_custom_help()
 
     def add_custom_variable(self):
-        row = self.table_vars.rowCount()
-        self.table_vars.insertRow(row)
-        self.table_vars.setItem(row, 0, QTableWidgetItem(f"var{row}"))
-        self.table_vars.setItem(row, 1, QTableWidgetItem("1.0"))
+        self.table_vars.blockSignals(True)
+        try:
+            row = self.table_vars.rowCount()
+            self.table_vars.insertRow(row)
+            self.table_vars.setItem(row, 0, QTableWidgetItem(f"var{row}"))
+            self.table_vars.setItem(row, 1, QTableWidgetItem("1.0"))
+        finally:
+            self.table_vars.blockSignals(False)
+        # Trigger sync once after complete
+        self.sync_source_to_config()
 
     def del_custom_variable(self):
         row = self.table_vars.currentRow()
@@ -501,6 +509,145 @@ class ParameterPanel(QWidget):
         
         return widget, sb, combo
 
+    def create_geometric_config_widget(self, prefix, comp_type='trans'):
+        """
+        Create a widget for geometric shape configuration (Trans or Phase)
+        """
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Shape Selector
+        layout.addWidget(QLabel("选择形状 (Select Shape):"))
+        combo_shape = QComboBox()
+        combo_shape.addItems(["圆环 (Annular)", "圆形 (Circle)", "矩形 (Rectangle)", "多边形 (Polygon)"])
+        layout.addWidget(combo_shape)
+        
+        # Shape Parameters Stack
+        shape_stack = QStackedWidget()
+        
+        # Value Label/Range
+        val_label = "透射率 (Transmission):" if comp_type == 'trans' else "相位 (Phase):"
+        val_range = (0.0, 1.0) if comp_type == 'trans' else (-100.0, 100.0) # Phase range loose
+        
+        # Helper for param row
+        def create_param_row(label, default, suffix=" um", min_val=-100000.0, max_val=100000.0):
+            sb = QDoubleSpinBox()
+            sb.setRange(min_val, max_val)
+            sb.setValue(default)
+            if suffix: sb.setSuffix(suffix)
+            return label, sb
+            
+        # 0: Annular
+        page_annular = QWidget()
+        pa_layout = QFormLayout(page_annular)
+        _, sb_ann_r_in = create_param_row("内径 (Inner R):", 0.0, min_val=0.0)
+        _, sb_ann_r_out = create_param_row("外径 (Outer R):", 100.0, min_val=0.0)
+        _, sb_ann_cx = create_param_row("中心 X (Center X):", 0.0)
+        _, sb_ann_cy = create_param_row("中心 Y (Center Y):", 0.0)
+        _, sb_ann_val = create_param_row(val_label, 1.0 if comp_type=='trans' else 0.0, suffix="", min_val=val_range[0], max_val=val_range[1])
+        if comp_type == 'trans': sb_ann_val.setSingleStep(0.1)
+        
+        pa_layout.addRow("内径 (Inner R):", sb_ann_r_in)
+        pa_layout.addRow("外径 (Outer R):", sb_ann_r_out)
+        pa_layout.addRow("中心 X (Center X):", sb_ann_cx)
+        pa_layout.addRow("中心 Y (Center Y):", sb_ann_cy)
+        pa_layout.addRow(val_label, sb_ann_val)
+        shape_stack.addWidget(page_annular)
+        
+        # 1: Circle
+        page_circle = QWidget()
+        pc_layout = QFormLayout(page_circle)
+        _, sb_cir_r = create_param_row("半径 (Radius):", 100.0, min_val=0.0)
+        _, sb_cir_cx = create_param_row("中心 X (Center X):", 0.0)
+        _, sb_cir_cy = create_param_row("中心 Y (Center Y):", 0.0)
+        _, sb_cir_val = create_param_row(val_label, 1.0 if comp_type=='trans' else 0.0, suffix="", min_val=val_range[0], max_val=val_range[1])
+        if comp_type == 'trans': sb_cir_val.setSingleStep(0.1)
+
+        pc_layout.addRow("半径 (Radius):", sb_cir_r)
+        pc_layout.addRow("中心 X (Center X):", sb_cir_cx)
+        pc_layout.addRow("中心 Y (Center Y):", sb_cir_cy)
+        pc_layout.addRow(val_label, sb_cir_val)
+        shape_stack.addWidget(page_circle)
+        
+        # 2: Rectangle
+        page_rect = QWidget()
+        pr_layout = QFormLayout(page_rect)
+        _, sb_rect_w = create_param_row("宽度 (Width):", 200.0, min_val=0.0)
+        _, sb_rect_h = create_param_row("高度 (Height):", 200.0, min_val=0.0)
+        _, sb_rect_cx = create_param_row("中心 X (Center X):", 0.0)
+        _, sb_rect_cy = create_param_row("中心 Y (Center Y):", 0.0)
+        _, sb_rect_rot = create_param_row("旋转 (Rotation):", 0.0, suffix=" deg", min_val=-360.0, max_val=360.0)
+        _, sb_rect_val = create_param_row(val_label, 1.0 if comp_type=='trans' else 0.0, suffix="", min_val=val_range[0], max_val=val_range[1])
+        if comp_type == 'trans': sb_rect_val.setSingleStep(0.1)
+
+        pr_layout.addRow("宽度 (Width):", sb_rect_w)
+        pr_layout.addRow("高度 (Height):", sb_rect_h)
+        pr_layout.addRow("中心 X (Center X):", sb_rect_cx)
+        pr_layout.addRow("中心 Y (Center Y):", sb_rect_cy)
+        pr_layout.addRow("旋转 (Rotation):", sb_rect_rot)
+        pr_layout.addRow(val_label, sb_rect_val)
+        shape_stack.addWidget(page_rect)
+        
+        # 3: Polygon (New)
+        page_poly = QWidget()
+        pp_layout = QVBoxLayout(page_poly)
+        poly_editor = PolygonEditorWidget()
+        _, sb_poly_val = create_param_row(val_label, 1.0 if comp_type=='trans' else 0.0, suffix="", min_val=val_range[0], max_val=val_range[1])
+        if comp_type == 'trans': sb_poly_val.setSingleStep(0.1)
+        
+        pp_layout.addWidget(QLabel("多边形顶点 (Polygon Vertices):"))
+        pp_layout.addWidget(poly_editor)
+        pp_layout.addWidget(QLabel(val_label)) # Form layout mimic
+        pp_layout.addWidget(sb_poly_val)
+        
+        shape_stack.addWidget(page_poly)
+        
+        layout.addWidget(shape_stack)
+        
+        combo_shape.currentIndexChanged.connect(shape_stack.setCurrentIndex)
+        
+        # Connect signals to sync
+        combo_shape.currentIndexChanged.connect(self.sync_source_to_config)
+        for w in [sb_ann_r_in, sb_ann_r_out, sb_ann_cx, sb_ann_cy, sb_ann_val,
+                  sb_cir_r, sb_cir_cx, sb_cir_cy, sb_cir_val,
+                  sb_rect_w, sb_rect_h, sb_rect_cx, sb_rect_cy, sb_rect_rot, sb_rect_val,
+                  sb_poly_val]:
+            w.valueChanged.connect(self.sync_source_to_config)
+            
+        poly_editor.dataChanged.connect(self.sync_source_to_config)
+        
+        # Store refs dynamically
+        id_prefix = f"{prefix}_{comp_type}"
+        setattr(self, f"combo_shape_{id_prefix}", combo_shape)
+        setattr(self, f"stack_shape_{id_prefix}", shape_stack)
+        
+        # Annular
+        setattr(self, f"sb_ann_r_in_{id_prefix}", sb_ann_r_in)
+        setattr(self, f"sb_ann_r_out_{id_prefix}", sb_ann_r_out)
+        setattr(self, f"sb_ann_cx_{id_prefix}", sb_ann_cx)
+        setattr(self, f"sb_ann_cy_{id_prefix}", sb_ann_cy)
+        setattr(self, f"sb_ann_val_{id_prefix}", sb_ann_val)
+        
+        # Circle
+        setattr(self, f"sb_cir_r_{id_prefix}", sb_cir_r)
+        setattr(self, f"sb_cir_cx_{id_prefix}", sb_cir_cx)
+        setattr(self, f"sb_cir_cy_{id_prefix}", sb_cir_cy)
+        setattr(self, f"sb_cir_val_{id_prefix}", sb_cir_val)
+        
+        # Rect
+        setattr(self, f"sb_rect_w_{id_prefix}", sb_rect_w)
+        setattr(self, f"sb_rect_h_{id_prefix}", sb_rect_h)
+        setattr(self, f"sb_rect_cx_{id_prefix}", sb_rect_cx)
+        setattr(self, f"sb_rect_cy_{id_prefix}", sb_rect_cy)
+        setattr(self, f"sb_rect_rot_{id_prefix}", sb_rect_rot)
+        setattr(self, f"sb_rect_val_{id_prefix}", sb_rect_val)
+        
+        # Poly
+        setattr(self, f"poly_editor_{id_prefix}", poly_editor)
+        setattr(self, f"sb_poly_val_{id_prefix}", sb_poly_val)
+        
+        return widget
+
     def create_modulator_tab_generic(self, title, prefix):
         """
         Generic creator for modulator tabs
@@ -512,7 +659,6 @@ class ParameterPanel(QWidget):
         pos_group = QGroupBox("位置 (Position)")
         pos_layout = QFormLayout()
         
-        # Default 10mm = 10000um
         default_z = 10000.0 if prefix == 'mod1' else 20000.0
         w_z, sb_z, combo_z = self.create_unit_spinbox(default_z, "um")
         
@@ -520,7 +666,6 @@ class ParameterPanel(QWidget):
         pos_group.setLayout(pos_layout)
         layout.addWidget(pos_group)
         
-        # Store widget reference
         setattr(self, f"sb_{prefix}_z", sb_z)
         setattr(self, f"combo_{prefix}_z_unit", combo_z)
         
@@ -543,7 +688,14 @@ class ParameterPanel(QWidget):
         page_mask = QWidget()
         pm_layout = QVBoxLayout(page_mask)
         
-        # Phase
+        # Tabs for Definition Method
+        mask_tabs = QTabWidget()
+        
+        # Tab 1: File Import
+        tab_file = QWidget()
+        tf_layout = QVBoxLayout(tab_file)
+        
+        # Phase File
         phase_group = QGroupBox("相位调制 (Phase)")
         ph_layout = QVBoxLayout()
         btn_phase = QPushButton("加载相位分布 (Load Phase)")
@@ -552,13 +704,12 @@ class ParameterPanel(QWidget):
         ph_layout.addWidget(btn_phase)
         ph_layout.addWidget(lbl_phase)
         phase_group.setLayout(ph_layout)
-        pm_layout.addWidget(phase_group)
+        tf_layout.addWidget(phase_group)
         
-        # Store refs
         setattr(self, f"btn_load_phase{prefix[-1]}", btn_phase)
         setattr(self, f"lbl_phase{prefix[-1]}_status", lbl_phase)
         
-        # Amp
+        # Amp File
         amp_group = QGroupBox("透射率 (Transmission)")
         am_layout = QVBoxLayout()
         btn_amp = QPushButton("加载透射率 (Load Trans)")
@@ -567,26 +718,93 @@ class ParameterPanel(QWidget):
         am_layout.addWidget(btn_amp)
         am_layout.addWidget(lbl_amp)
         amp_group.setLayout(am_layout)
-        pm_layout.addWidget(amp_group)
+        tf_layout.addWidget(amp_group)
         
         setattr(self, f"btn_load_amp{prefix[-1]}", btn_amp)
         setattr(self, f"lbl_amp{prefix[-1]}_status", lbl_amp)
         
+        tf_layout.addStretch()
+        mask_tabs.addTab(tab_file, "文件导入 (File Import)")
+        
+        # Tab 2: Parameter Definition
+        tab_param = QWidget()
+        tp_layout = QVBoxLayout(tab_param)
+        
+        # --- Transmission Distribution ---
+        grp_trans = QGroupBox("透射率分布 (Transmittance Distribution)")
+        gt_layout = QVBoxLayout(grp_trans)
+        
+        combo_trans_mode = QComboBox()
+        combo_trans_mode.addItems(["公式定义 (Formula)", "几何形状 (Geometric Shape)"])
+        gt_layout.addWidget(combo_trans_mode)
+        
+        stack_trans = QStackedWidget()
+        
+        # Formula
+        fw_trans = FormulaWidget(formula_type='trans')
+        fw_trans.formulaChanged.connect(lambda _: self.sync_source_to_config())
+        stack_trans.addWidget(fw_trans)
+        
+        # Geometric
+        gw_trans = self.create_geometric_config_widget(prefix, 'trans')
+        stack_trans.addWidget(gw_trans)
+        
+        gt_layout.addWidget(stack_trans)
+        combo_trans_mode.currentIndexChanged.connect(stack_trans.setCurrentIndex)
+        combo_trans_mode.currentIndexChanged.connect(self.sync_source_to_config)
+        
+        tp_layout.addWidget(grp_trans)
+        
+        # --- Phase Distribution ---
+        grp_phase = QGroupBox("相位分布 (Phase Distribution)")
+        gp_layout = QVBoxLayout(grp_phase)
+        
+        combo_phase_mode = QComboBox()
+        combo_phase_mode.addItems(["公式定义 (Formula)", "几何形状 (Geometric Shape)"])
+        gp_layout.addWidget(combo_phase_mode)
+        
+        stack_phase = QStackedWidget()
+        
+        # Formula
+        fw_phase = FormulaWidget(formula_type='phase')
+        fw_phase.formulaChanged.connect(lambda _: self.sync_source_to_config())
+        stack_phase.addWidget(fw_phase)
+        
+        # Geometric
+        gw_phase = self.create_geometric_config_widget(prefix, 'phase')
+        stack_phase.addWidget(gw_phase)
+        
+        gp_layout.addWidget(stack_phase)
+        combo_phase_mode.currentIndexChanged.connect(stack_phase.setCurrentIndex)
+        combo_phase_mode.currentIndexChanged.connect(self.sync_source_to_config)
+        
+        tp_layout.addWidget(grp_phase)
+        
+        mask_tabs.addTab(tab_param, "参数定义法 (Param Definition)")
+        
+        pm_layout.addWidget(mask_tabs)
+        
+        # Store refs
+        setattr(self, f"mask_tabs_{prefix}", mask_tabs)
+        setattr(self, f"combo_trans_mode_{prefix}", combo_trans_mode)
+        setattr(self, f"fw_trans_{prefix}", fw_trans)
+        setattr(self, f"combo_phase_mode_{prefix}", combo_phase_mode)
+        setattr(self, f"fw_phase_{prefix}", fw_phase)
+        
+        mask_tabs.currentChanged.connect(self.sync_source_to_config)
+        
         stack.addWidget(page_mask)
         
-        # 1: Lens Params (Shared for all lens types, logic handles visibility)
+        # 1: Lens Params
         page_lens = QWidget()
         pl_layout = QFormLayout(page_lens)
         
-        # Diameter 25.4 mm = 25400 um
         w_D, sb_D, combo_D = self.create_unit_spinbox(25400.0, "um")
-        
-        # Focal Length 100 mm = 100000 um
         w_f, sb_f, combo_f = self.create_unit_spinbox(100000.0, "um")
         
         sb_NA = QDoubleSpinBox()
         sb_NA.setRange(0.001, 0.999)
-        sb_NA.setValue(0.127) # 25.4 / (2*100) = 0.127
+        sb_NA.setValue(0.127)
         sb_NA.setDecimals(3)
         
         # Inter-dependency logic
@@ -622,12 +840,8 @@ class ParameterPanel(QWidget):
         
         sb_D.valueChanged.connect(update_na)
         sb_f.valueChanged.connect(update_na)
-        # Also connect unit changes? create_unit_spinbox handles value update, which triggers valueChanged.
-        # So update_na will be called.
-        
         sb_NA.valueChanged.connect(update_f)
         
-        # Connect to sync
         sb_D.valueChanged.connect(self.sync_source_to_config)
         sb_f.valueChanged.connect(self.sync_source_to_config)
         sb_NA.valueChanged.connect(self.sync_source_to_config)
@@ -636,8 +850,8 @@ class ParameterPanel(QWidget):
         pl_layout.addRow("焦距 f (Focal Length):", w_f)
         pl_layout.addRow("数值孔径 NA:", sb_NA)
         
-        stack.addWidget(page_lens) # 1: Ideal
-        stack.addWidget(QWidget()) # 2: Cyl X (Reuse or new? Reuse logic, new widget or same?)
+        stack.addWidget(page_lens) 
+        stack.addWidget(QWidget()) # Cyl X placeholder
         
         setattr(self, f"sb_{prefix}_D", sb_D)
         setattr(self, f"combo_{prefix}_D_unit", combo_D)
@@ -659,9 +873,8 @@ class ParameterPanel(QWidget):
         cb_lcp = QCheckBox("左旋圆偏振 (LCP)")
         cb_rcp = QCheckBox("右旋圆偏振 (RCP)")
         cb_unpol = QCheckBox("无偏振 (Unpolarized)")
-        cb_unpol.setChecked(True) # Default
+        cb_unpol.setChecked(True)
         
-        # Connect sync
         cb_lin.stateChanged.connect(self.sync_source_to_config)
         cb_lcp.stateChanged.connect(self.sync_source_to_config)
         cb_rcp.stateChanged.connect(self.sync_source_to_config)
@@ -679,7 +892,6 @@ class ParameterPanel(QWidget):
         setattr(self, f"cb_{prefix}_pol_rcp", cb_rcp)
         setattr(self, f"cb_{prefix}_pol_unpol", cb_unpol)
         
-        # Additional Angle Trans for Mod2
         if prefix == 'mod2':
             angle_group = QGroupBox("角度-透射率 (Angle-Transmission)")
             angle_layout = QVBoxLayout()
@@ -1258,9 +1470,16 @@ class ParameterPanel(QWidget):
         # Source
         vars_list = []
         for row in range(self.table_vars.rowCount()):
+            name_item = self.table_vars.item(row, 0)
+            val_item = self.table_vars.item(row, 1)
+            
+            # Safe access
+            name_text = name_item.text() if name_item else f"var{row}"
+            val_text = val_item.text() if val_item else "1.0"
+            
             vars_list.append({
-                'name': self.table_vars.item(row, 0).text(),
-                'value': self.table_vars.item(row, 1).text()
+                'name': name_text,
+                'value': val_text
             })
             
         data['source'] = {
@@ -1310,6 +1529,48 @@ class ParameterPanel(QWidget):
             else:
                 mod_data['phase_path'] = self.mod2_phase_path
                 mod_data['angle_path'] = self.mod2_angle_path
+            
+            # Custom Mask Definition
+            if hasattr(self, f"mask_tabs_{prefix}"):
+                
+                def get_geom_params(p_prefix, c_type):
+                    id_p = f"{p_prefix}_{c_type}"
+                    return {
+                        'type': getattr(self, f"combo_shape_{id_p}").currentIndex(),
+                        'ann_r_in': getattr(self, f"sb_ann_r_in_{id_p}").value(),
+                        'ann_r_out': getattr(self, f"sb_ann_r_out_{id_p}").value(),
+                        'ann_cx': getattr(self, f"sb_ann_cx_{id_p}").value(),
+                        'ann_cy': getattr(self, f"sb_ann_cy_{id_p}").value(),
+                        'ann_val': getattr(self, f"sb_ann_val_{id_p}").value(),
+                        
+                        'cir_r': getattr(self, f"sb_cir_r_{id_p}").value(),
+                        'cir_cx': getattr(self, f"sb_cir_cx_{id_p}").value(),
+                        'cir_cy': getattr(self, f"sb_cir_cy_{id_p}").value(),
+                        'cir_val': getattr(self, f"sb_cir_val_{id_p}").value(),
+                        
+                        'rect_w': getattr(self, f"sb_rect_w_{id_p}").value(),
+                        'rect_h': getattr(self, f"sb_rect_h_{id_p}").value(),
+                        'rect_cx': getattr(self, f"sb_rect_cx_{id_p}").value(),
+                        'rect_cy': getattr(self, f"sb_rect_cy_{id_p}").value(),
+                        'rect_rot': getattr(self, f"sb_rect_rot_{id_p}").value(),
+                        'rect_val': getattr(self, f"sb_rect_val_{id_p}").value(),
+                        
+                        'poly_val': getattr(self, f"sb_poly_val_{id_p}").value(),
+                        'poly_verts': getattr(self, f"poly_editor_{id_p}").get_vertices()
+                    }
+
+                mod_data['custom_mask'] = {
+                    'mode': getattr(self, f"mask_tabs_{prefix}").currentIndex(),
+                    'trans_mode': getattr(self, f"combo_trans_mode_{prefix}").currentIndex(),
+                    'trans_formula': getattr(self, f"fw_trans_{prefix}").get_formula(),
+                    'trans_vars': getattr(self, f"fw_trans_{prefix}").custom_vars,
+                    'trans_geom': get_geom_params(prefix, 'trans'),
+                    
+                    'phase_mode': getattr(self, f"combo_phase_mode_{prefix}").currentIndex(),
+                    'phase_formula': getattr(self, f"fw_phase_{prefix}").get_formula(),
+                    'phase_vars': getattr(self, f"fw_phase_{prefix}").custom_vars,
+                    'phase_geom': get_geom_params(prefix, 'phase'),
+                }
                 
             data[prefix] = mod_data
             
@@ -1399,6 +1660,88 @@ class ParameterPanel(QWidget):
                 else:
                     if m.get('phase_path'): self.load_data('phase2', m['phase_path'])
                     if m.get('angle_path'): self.load_data('angle2', m['angle_path'])
+                
+                # Load Custom Mask Definition
+                if 'custom_mask' in m:
+                    cm = m['custom_mask']
+                    if hasattr(self, f"mask_tabs_{prefix}"):
+                        
+                        def load_geom(p_prefix, c_type, g_data):
+                            id_p = f"{p_prefix}_{c_type}"
+                            if not g_data: return
+                            getattr(self, f"combo_shape_{id_p}").setCurrentIndex(g_data.get('type', 0))
+                            
+                            getattr(self, f"sb_ann_r_in_{id_p}").setValue(g_data.get('ann_r_in', 0.0))
+                            getattr(self, f"sb_ann_r_out_{id_p}").setValue(g_data.get('ann_r_out', 100.0))
+                            getattr(self, f"sb_ann_cx_{id_p}").setValue(g_data.get('ann_cx', 0.0))
+                            getattr(self, f"sb_ann_cy_{id_p}").setValue(g_data.get('ann_cy', 0.0))
+                            getattr(self, f"sb_ann_val_{id_p}").setValue(g_data.get('ann_val', 1.0))
+                            
+                            getattr(self, f"sb_cir_r_{id_p}").setValue(g_data.get('cir_r', 100.0))
+                            getattr(self, f"sb_cir_cx_{id_p}").setValue(g_data.get('cir_cx', 0.0))
+                            getattr(self, f"sb_cir_cy_{id_p}").setValue(g_data.get('cir_cy', 0.0))
+                            getattr(self, f"sb_cir_val_{id_p}").setValue(g_data.get('cir_val', 1.0))
+                            
+                            getattr(self, f"sb_rect_w_{id_p}").setValue(g_data.get('rect_w', 200.0))
+                            getattr(self, f"sb_rect_h_{id_p}").setValue(g_data.get('rect_h', 200.0))
+                            getattr(self, f"sb_rect_cx_{id_p}").setValue(g_data.get('rect_cx', 0.0))
+                            getattr(self, f"sb_rect_cy_{id_p}").setValue(g_data.get('rect_cy', 0.0))
+                            getattr(self, f"sb_rect_rot_{id_p}").setValue(g_data.get('rect_rot', 0.0))
+                            getattr(self, f"sb_rect_val_{id_p}").setValue(g_data.get('rect_val', 1.0))
+                            
+                            getattr(self, f"sb_poly_val_{id_p}").setValue(g_data.get('poly_val', 1.0))
+                            getattr(self, f"poly_editor_{id_p}").set_vertices(g_data.get('poly_verts', []))
+                        
+                        # Legacy Check
+                        if 'shape_type' in cm:
+                             old_mode = cm.get('mode', 0)
+                             if old_mode == 2:
+                                 getattr(self, f"mask_tabs_{prefix}").setCurrentIndex(1)
+                                 getattr(self, f"combo_trans_mode_{prefix}").setCurrentIndex(1)
+                                 getattr(self, f"combo_phase_mode_{prefix}").setCurrentIndex(0)
+                                 
+                                 old_geom = {
+                                     'type': cm.get('shape_type', 0),
+                                     'ann_r_in': cm.get('ann_r_in', 0),
+                                     'ann_r_out': cm.get('ann_r_out', 100),
+                                     'ann_cx': cm.get('ann_cx', 0),
+                                     'ann_cy': cm.get('ann_cy', 0),
+                                     'ann_val': cm.get('ann_trans', 1.0),
+                                     'cir_r': cm.get('cir_r', 100),
+                                     'cir_cx': cm.get('cir_cx', 0),
+                                     'cir_cy': cm.get('cir_cy', 0),
+                                     'cir_val': cm.get('cir_trans', 1.0),
+                                     'rect_w': cm.get('rect_w', 200),
+                                     'rect_h': cm.get('rect_h', 200),
+                                     'rect_cx': cm.get('rect_cx', 0),
+                                     'rect_cy': cm.get('rect_cy', 0),
+                                     'rect_rot': cm.get('rect_rot', 0),
+                                     'rect_val': cm.get('rect_trans', 1.0),
+                                 }
+                                 load_geom(prefix, 'trans', old_geom)
+                                 
+                             elif old_mode == 1:
+                                 getattr(self, f"mask_tabs_{prefix}").setCurrentIndex(1)
+                                 getattr(self, f"combo_trans_mode_{prefix}").setCurrentIndex(0)
+                                 getattr(self, f"combo_phase_mode_{prefix}").setCurrentIndex(0)
+                                 getattr(self, f"fw_trans_{prefix}").set_formula(cm.get('trans_formula', '1.0'))
+                                 getattr(self, f"fw_phase_{prefix}").set_formula(cm.get('phase_formula', '0.0'))
+                                 getattr(self, f"fw_trans_{prefix}").set_variables(cm.get('trans_vars', {}))
+                                 getattr(self, f"fw_phase_{prefix}").set_variables(cm.get('phase_vars', {}))
+                             else:
+                                 getattr(self, f"mask_tabs_{prefix}").setCurrentIndex(0)
+                        else:
+                            getattr(self, f"mask_tabs_{prefix}").setCurrentIndex(cm.get('mode', 0))
+                            
+                            getattr(self, f"combo_trans_mode_{prefix}").setCurrentIndex(cm.get('trans_mode', 0))
+                            getattr(self, f"fw_trans_{prefix}").set_formula(cm.get('trans_formula', '1.0'))
+                            getattr(self, f"fw_trans_{prefix}").set_variables(cm.get('trans_vars', {}))
+                            if 'trans_geom' in cm: load_geom(prefix, 'trans', cm['trans_geom'])
+                            
+                            getattr(self, f"combo_phase_mode_{prefix}").setCurrentIndex(cm.get('phase_mode', 0))
+                            getattr(self, f"fw_phase_{prefix}").set_formula(cm.get('phase_formula', '0.0'))
+                            getattr(self, f"fw_phase_{prefix}").set_variables(cm.get('phase_vars', {}))
+                            if 'phase_geom' in cm: load_geom(prefix, 'phase', cm['phase_geom'])
                     
         # Monitors
         if 'monitors' in data:

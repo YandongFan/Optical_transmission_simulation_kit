@@ -1,0 +1,247 @@
+
+import numpy as np
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                             QTextEdit, QTableWidget, QTableWidgetItem, 
+                             QPushButton, QHeaderView, QSplitter, QFrame,
+                             QToolTip)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import re
+from src.core.modulator import evaluate_formula
+
+class FormulaPreview(FigureCanvas):
+    def __init__(self, parent=None, width=4, height=3, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        self.ax = fig.add_subplot(111)
+        self.ax.axis('off')
+        super().__init__(fig)
+        self.setParent(parent)
+        self.cbar = None
+
+    def update_plot(self, data, title="Preview"):
+        self.ax.clear()
+        self.ax.set_title(title, fontsize=10)
+        self.ax.axis('off')
+        
+        if data is None:
+            self.ax.text(0.5, 0.5, "No Data / Error", 
+                         ha='center', va='center', transform=self.ax.transAxes)
+            # Remove old colorbar if exists
+            if self.cbar:
+                try:
+                    self.cbar.remove()
+                except Exception:
+                    pass
+                self.cbar = None
+            self.draw()
+            return
+
+        im = self.ax.imshow(data, cmap='viridis', origin='lower')
+        
+        # Recreate colorbar safely
+        if self.cbar:
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
+            self.cbar = None
+            
+        self.cbar = self.figure.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04)
+        self.draw()
+
+class FormulaWidget(QWidget):
+    """
+    Reusable widget for custom formula editing and preview.
+    """
+    formulaChanged = pyqtSignal(str) # Emits validation status or formula
+    
+    def __init__(self, formula_type='trans', parent=None):
+        """
+        :param formula_type: 'trans' (0-1) or 'phase' (real)
+        """
+        super().__init__(parent)
+        self.formula_type = formula_type
+        self.last_valid_formula = ""
+        self.custom_vars = {}
+        
+        self.init_ui()
+        
+        # Debounce timer
+        self.check_timer = QTimer()
+        self.check_timer.setSingleShot(True)
+        self.check_timer.setInterval(500)
+        self.check_timer.timeout.connect(self.validate_and_preview)
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Splitter for Editor vs Preview
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left: Editor
+        editor_widget = QWidget()
+        editor_layout = QVBoxLayout(editor_widget)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Help Label
+        help_text = "支持变量 (Vars): x, y, lambda, theta, phi (builtin) + custom"
+        if self.formula_type == 'trans':
+            help_text += "\n输出范围 (Output): [0, 1]"
+        else:
+            help_text += "\n输出单位 (Unit): Radian/Degree (User def)"
+        
+        self.lbl_help = QLabel(help_text)
+        self.lbl_help.setStyleSheet("color: gray; font-size: 9pt;")
+        editor_layout.addWidget(self.lbl_help)
+        
+        # Formula Input
+        self.txt_formula = QTextEdit()
+        self.txt_formula.setPlaceholderText("e.g. np.sin(x/10) * 0.5 + 0.5")
+        self.txt_formula.setMaximumHeight(80)
+        self.txt_formula.textChanged.connect(self.on_text_changed)
+        editor_layout.addWidget(self.txt_formula)
+        
+        # Error Label
+        self.lbl_error = QLabel("")
+        self.lbl_error.setStyleSheet("color: red; font-size: 9pt;")
+        self.lbl_error.setWordWrap(True)
+        self.lbl_error.setVisible(False)
+        editor_layout.addWidget(self.lbl_error)
+        
+        # Variables Table
+        self.table_vars = QTableWidget(0, 2)
+        self.table_vars.setHorizontalHeaderLabels(["Name", "Value"])
+        self.table_vars.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_vars.setMaximumHeight(100)
+        self.table_vars.cellChanged.connect(self.on_var_changed)
+        editor_layout.addWidget(self.table_vars)
+        
+        # Var Buttons
+        btn_layout = QHBoxLayout()
+        self.btn_add_var = QPushButton("+ Var")
+        self.btn_add_var.clicked.connect(self.add_variable)
+        self.btn_del_var = QPushButton("- Var")
+        self.btn_del_var.clicked.connect(self.del_variable)
+        btn_layout.addWidget(self.btn_add_var)
+        btn_layout.addWidget(self.btn_del_var)
+        editor_layout.addStretch()
+        editor_layout.addLayout(btn_layout)
+        
+        splitter.addWidget(editor_widget)
+        
+        # Right: Preview
+        preview_widget = QWidget()
+        preview_layout = QVBoxLayout(preview_widget)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.preview_canvas = FormulaPreview(width=3, height=3)
+        preview_layout.addWidget(self.preview_canvas)
+        
+        splitter.addWidget(preview_widget)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        
+        layout.addWidget(splitter)
+
+    def on_text_changed(self):
+        self.check_timer.start()
+        
+    def on_var_changed(self, row, col):
+        self.update_custom_vars_from_table()
+        self.check_timer.start()
+
+    def add_variable(self):
+        row = self.table_vars.rowCount()
+        self.table_vars.insertRow(row)
+        self.table_vars.setItem(row, 0, QTableWidgetItem(f"k{row}"))
+        self.table_vars.setItem(row, 1, QTableWidgetItem("1.0"))
+
+    def del_variable(self):
+        row = self.table_vars.currentRow()
+        if row >= 0:
+            self.table_vars.removeRow(row)
+            self.update_custom_vars_from_table()
+            self.check_timer.start()
+
+    def update_custom_vars_from_table(self):
+        self.custom_vars = {}
+        for r in range(self.table_vars.rowCount()):
+            name_item = self.table_vars.item(r, 0)
+            val_item = self.table_vars.item(r, 1)
+            if name_item and val_item:
+                try:
+                    self.custom_vars[name_item.text()] = float(val_item.text())
+                except ValueError:
+                    pass
+
+    def get_formula(self):
+        return self.txt_formula.toPlainText().strip()
+
+    def set_formula(self, formula):
+        self.txt_formula.blockSignals(True)
+        self.txt_formula.setPlainText(formula)
+        self.txt_formula.blockSignals(False)
+        self.validate_and_preview()
+
+    def set_variables(self, vars_dict):
+        self.table_vars.blockSignals(True)
+        self.table_vars.setRowCount(0)
+        for i, (k, v) in enumerate(vars_dict.items()):
+            self.table_vars.insertRow(i)
+            self.table_vars.setItem(i, 0, QTableWidgetItem(str(k)))
+            self.table_vars.setItem(i, 1, QTableWidgetItem(str(v)))
+        self.update_custom_vars_from_table()
+        self.table_vars.blockSignals(False)
+        self.validate_and_preview()
+
+    def validate_and_preview(self):
+        try:
+            formula = self.get_formula()
+            if not formula:
+                self.lbl_error.setText("")
+                self.lbl_error.setVisible(False)
+                self.preview_canvas.update_plot(None)
+                return
+
+            # Create dummy grid
+            N = 256
+            x = np.linspace(-100, 100, N)
+            y = np.linspace(-100, 100, N)
+            X, Y = np.meshgrid(x, y)
+            
+            res = evaluate_formula(formula, self.custom_vars, X, Y, 0.532)
+            
+            if res is None:
+                self.lbl_error.setText("Error: Evaluation Failed")
+                self.lbl_error.setVisible(True)
+                self.preview_canvas.update_plot(None)
+                self.formulaChanged.emit("invalid")
+                return
+                
+            # Validation for Trans (0-1)
+            if self.formula_type == 'trans':
+                if np.any(res < 0) or np.any(res > 1):
+                    self.lbl_error.setText("Warning: Values out of range [0, 1] (clamped for preview)")
+                    self.lbl_error.setVisible(True)
+                    res = np.clip(res, 0, 1)
+                else:
+                    self.lbl_error.setText("")
+                    self.lbl_error.setVisible(False)
+            else:
+                self.lbl_error.setText("")
+                self.lbl_error.setVisible(False)
+                
+            self.preview_canvas.update_plot(res, title="Preview (256x256)")
+            self.last_valid_formula = formula
+            self.formulaChanged.emit("valid")
+        except Exception as e:
+            # Catch all GUI-level exceptions during validation
+            print(f"Validation crash prevented: {e}")
+            self.lbl_error.setText(f"System Error: {str(e)}")
+            self.lbl_error.setVisible(True)
+            self.preview_canvas.update_plot(None)
+            self.formulaChanged.emit("invalid")
+
