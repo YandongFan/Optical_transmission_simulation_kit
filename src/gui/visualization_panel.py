@@ -1,11 +1,15 @@
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy, QComboBox, QLabel, QHBoxLayout, QMessageBox, QFileDialog, QListWidget, QGroupBox, QPushButton, QDialog)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QSizePolicy, QComboBox, QLabel, QHBoxLayout, QMessageBox, QFileDialog, QListWidget, QGroupBox, QPushButton, QDialog, QSplitter, QScrollArea)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
 import h5py
 import pandas as pd
 import time
+import json
+import os
+
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "gui_layout.json")
 
 class VisualizationPanel(QWidget):
     """
@@ -14,25 +18,49 @@ class VisualizationPanel(QWidget):
     """
     def __init__(self):
         super().__init__()
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Splitter
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        main_layout.addWidget(self.splitter)
+        
+        # --- Top Part: Monitor List ---
+        self.top_widget = QWidget()
+        top_layout = QVBoxLayout(self.top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
         
         # 监视器列表 (Monitor List)
         mon_group = QGroupBox("监视器列表 (Monitor List)")
         mon_layout = QHBoxLayout(mon_group)
+        mon_layout.setContentsMargins(4, 4, 4, 4)
+        mon_layout.setSpacing(6)
         
-        self.list_monitors = QListWidget() # Replaces combo_monitors
+        self.list_monitors = QListWidget() 
         self.list_monitors.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_monitors.itemDoubleClicked.connect(self.on_monitor_double_clicked)
         self.list_monitors.itemSelectionChanged.connect(self.on_monitor_selection_changed)
-        self.list_monitors.setFixedHeight(120) # Limit height
+        # Remove fixed height to allow resizing via splitter
+        # self.list_monitors.setFixedHeight(65) 
+        # Compact rows via stylesheet
+        self.list_monitors.setStyleSheet("QListWidget::item { height: 18px; padding: 0px; }")
+        
         mon_layout.addWidget(self.list_monitors)
         
         btn_layout = QVBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(2)
+        
         self.btn_view = QPushButton("查看 (View)")
+        self.btn_view.setFixedHeight(20) # Compact button
         self.btn_view.clicked.connect(self.view_monitor_floating)
+        
         self.btn_compare = QPushButton("对比 (Compare)")
+        self.btn_compare.setFixedHeight(20)
         self.btn_compare.clicked.connect(self.compare_monitors)
+        
         self.btn_export = QPushButton("导出 (Export)")
+        self.btn_export.setFixedHeight(20)
         self.btn_export.clicked.connect(self.export_current_monitor)
         
         btn_layout.addWidget(self.btn_view)
@@ -41,14 +69,17 @@ class VisualizationPanel(QWidget):
         btn_layout.addStretch()
         mon_layout.addLayout(btn_layout)
         
-        layout.addWidget(mon_group)
+        top_layout.addWidget(mon_group)
+        self.splitter.addWidget(self.top_widget)
         
-        # 数据存储 (Data storage)
-        self.monitor_data = {} # {monitor_name: {...}}
-        self.current_aspect_mode = 'default' # 'default', 'square', 'image'
+        # --- Bottom Part: Display Mode & Tabs ---
+        self.bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(self.bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
         
         # 显示控制 (Display Control)
         ctrl_layout = QHBoxLayout()
+        ctrl_layout.setContentsMargins(5, 5, 5, 5)
         ctrl_layout.addWidget(QLabel("显示模式 (Display Mode):"))
         self.combo_aspect = QComboBox()
         # 对应三种模式：默认自动拉伸、物理1:1（Axis Square）、像素1:1（Axis Image）
@@ -56,11 +87,40 @@ class VisualizationPanel(QWidget):
         self.combo_aspect.currentIndexChanged.connect(self.on_aspect_changed)
         ctrl_layout.addWidget(self.combo_aspect)
         ctrl_layout.addStretch()
-        layout.addLayout(ctrl_layout)
+        bottom_layout.addLayout(ctrl_layout)
         
         # 标签页 (Tabs for different views)
+        # Use ScrollArea to prevent auto-expansion
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        self.scroll.setWidget(self.tabs)
+        
+        bottom_layout.addWidget(self.scroll)
+        
+        self.splitter.addWidget(self.bottom_widget)
+        
+        # Splitter Settings
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.top_widget.setMinimumHeight(150)
+        self.bottom_widget.setMinimumHeight(150)
+        
+        # Persistence
+        self.save_timer = QTimer()
+        self.save_timer.setSingleShot(True)
+        self.save_timer.setInterval(500) # 500ms debounce
+        self.save_timer.timeout.connect(self.save_layout)
+        self.splitter.splitterMoved.connect(lambda: self.save_timer.start())
+        
+        # Load Layout
+        self.load_layout()
+        
+        # 数据存储 (Data storage)
+        self.monitor_data = {} # {monitor_name: {...}}
+        self.current_aspect_mode = 'default' # 'default', 'square', 'image'
         
         # 1. 光强分布 (Intensity Plot)
         self.intensity_canvas = PlotCanvas(self, width=5, height=4)
@@ -73,6 +133,55 @@ class VisualizationPanel(QWidget):
         # 3. 截面分布 (Cross-section Plot)
         self.cross_section_canvas = PlotCanvas(self, width=5, height=4)
         self.tabs.addTab(self.cross_section_canvas, "截面分布 (Cross Section)")
+
+    def save_layout(self):
+        """Save splitter state to JSON"""
+        try:
+            sizes = self.splitter.sizes()
+            total = sum(sizes)
+            if total > 0:
+                ratio = sizes[0] / total
+            else:
+                ratio = 0.5
+                
+            config = {'split_ratio': ratio}
+            
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config, f)
+            # print(f"Layout saved: {ratio:.2f}")
+        except Exception as e:
+            print(f"Failed to save layout: {e}")
+
+    def load_layout(self):
+        """Load splitter state from JSON"""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                
+                ratio = config.get('split_ratio', 0.5)
+                if not (0.1 < ratio < 0.9): # Validate
+                    ratio = 0.5
+            else:
+                ratio = 0.5
+                
+            # Apply ratio (need total height, but not available yet? Splitter might be 0 height)
+            # We can set stretch factors
+            self.splitter.setStretchFactor(0, int(ratio * 100))
+            self.splitter.setStretchFactor(1, int((1-ratio) * 100))
+            
+            # Also try setting sizes if widget has size (might need delay)
+            QTimer.singleShot(100, lambda: self._apply_ratio(ratio))
+            
+        except Exception as e:
+            print(f"Failed to load layout: {e}")
+            self.splitter.setSizes([1000, 1000]) # 50/50 fallback
+
+    def _apply_ratio(self, ratio):
+        h = self.splitter.height()
+        if h > 0:
+            self.splitter.setSizes([int(h * ratio), int(h * (1 - ratio))])
 
     def on_aspect_changed(self, index):
         """

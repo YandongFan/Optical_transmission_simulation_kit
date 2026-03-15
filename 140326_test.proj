@@ -5,11 +5,11 @@
         "ny": 512.0,
         "dx": 0.2,
         "dy": 0.2,
-        "wavelength": 0.633
+        "wavelength": 0.78
     },
     "source": {
         "type_idx": 2,
-        "polarization_type": 1,
+        "polarization_type": 2,
         "linear_angle": 0.0,
         "amplitude": 1.0,
         "z_pos": 0.0,
@@ -30,7 +30,7 @@
         "z_unit": "um",
         "type_idx": 0,
         "affected_polarizations": [
-            "lcp"
+            "rcp"
         ],
         "lens": {
             "D": 25400.0,
@@ -43,26 +43,80 @@
         "amp_path": null,
         "custom_mask": {
             "mode": 1,
+            "trans_mode": 1,
             "trans_formula": "",
-            "phase_formula": "",
             "trans_vars": {},
-            "phase_vars": {},
-            "shape_type": 0,
-            "ann_r_in": 7.07,
-            "ann_r_out": 14.14,
-            "ann_cx": 0.0,
-            "ann_cy": 0.0,
-            "ann_trans": 1.0,
-            "cir_r": 100.0,
-            "cir_cx": 0.0,
-            "cir_cy": 0.0,
-            "cir_trans": 1.0,
-            "rect_w": 200.0,
-            "rect_h": 200.0,
-            "rect_cx": 0.0,
-            "rect_cy": 0.0,
-            "rect_rot": 0.0,
-            "rect_trans": 1.0
+            "trans_geom": {
+                "type": 0,
+                "ann_r_in": 0.0,
+                "ann_r_out": 20.0,
+                "ann_cx": 0.0,
+                "ann_cy": 0.0,
+                "ann_val": 1.0,
+                "cir_r": 100.0,
+                "cir_cx": 0.0,
+                "cir_cy": 0.0,
+                "cir_val": 1.0,
+                "rect_w": 200.0,
+                "rect_h": 200.0,
+                "rect_cx": 0.0,
+                "rect_cy": 0.0,
+                "rect_rot": 0.0,
+                "rect_val": 1.0,
+                "poly_val": 1.0,
+                "poly_verts": [
+                    [
+                        0.0,
+                        100.0
+                    ],
+                    [
+                        86.6,
+                        -50.0
+                    ],
+                    [
+                        -86.6,
+                        -50.0
+                    ]
+                ]
+            },
+            "phase_mode": 0,
+            "phase_formula": "k0/2*(phi+pi/2)^2",
+            "phase_vars": {
+                "k0": 40.0
+            },
+            "phase_geom": {
+                "type": 0,
+                "ann_r_in": 0.0,
+                "ann_r_out": 100.0,
+                "ann_cx": 0.0,
+                "ann_cy": 0.0,
+                "ann_val": 0.0,
+                "cir_r": 100.0,
+                "cir_cx": 0.0,
+                "cir_cy": 0.0,
+                "cir_val": 0.0,
+                "rect_w": 200.0,
+                "rect_h": 200.0,
+                "rect_cx": 0.0,
+                "rect_cy": 0.0,
+                "rect_rot": 0.0,
+                "rect_val": 0.0,
+                "poly_val": 0.0,
+                "poly_verts": [
+                    [
+                        0.0,
+                        100.0
+                    ],
+                    [
+                        86.6,
+                        -50.0
+                    ],
+                    [
+                        -86.6,
+                        -50.0
+                    ]
+                ]
+            }
         }
     },
     "mod2": {
@@ -83,44 +137,173 @@
         "angle_path": null,
         "custom_mask": {
             "mode": 1,
+            "trans_mode": 0,
             "trans_formula": "",
-            "phase_formula": "",
             "trans_vars": {},
+            "trans_geom": {
+                "type": 0,
+                "ann_r_in": 0.0,
+                "ann_r_out": 100.0,
+                "ann_cx": 0.0,
+                "ann_cy": 0.0,
+                "ann_val": 1.0,
+                "cir_r": 100.0,
+                "cir_cx": 0.0,
+                "cir_cy": 0.0,
+                "cir_val": 1.0,
+                "rect_w": 200.0,
+                "rect_h": 200.0,
+                "rect_cx": 0.0,
+                "rect_cy": 0.0,
+                "rect_rot": 0.0,
+                "rect_val": 1.0,
+                "poly_val": 1.0,
+                "poly_verts": [
+                    [
+                        0.0,
+                        100.0
+                    ],
+                    [
+                        86.6,
+                        -50.0
+                    ],
+                    [
+                        -86.6,
+                        -50.0
+                    ]
+                ]
+            },
+            "phase_mode": 0,
+            "phase_formula": "",
             "phase_vars": {},
-            "shape_type": 0,
-            "ann_r_in": 0.0,
-            "ann_r_out": 100.0,
-            "ann_cx": 0.0,
-            "ann_cy": 0.0,
-            "ann_trans": 1.0,
-            "cir_r": 100.0,
-            "cir_cx": 0.0,
-            "cir_cy": 0.0,
-            "cir_trans": 1.0,
-            "rect_w": 200.0,
-            "rect_h": 200.0,
-            "rect_cx": 0.0,
-            "rect_cy": 0.0,
-            "rect_rot": 0.0,
-            "rect_trans": 1.0
+            "phase_geom": {
+                "type": 0,
+                "ann_r_in": 0.0,
+                "ann_r_out": 100.0,
+                "ann_cx": 0.0,
+                "ann_cy": 0.0,
+                "ann_val": 0.0,
+                "cir_r": 100.0,
+                "cir_cx": 0.0,
+                "cir_cy": 0.0,
+                "cir_val": 0.0,
+                "rect_w": 200.0,
+                "rect_h": 200.0,
+                "rect_cx": 0.0,
+                "rect_cy": 0.0,
+                "rect_rot": 0.0,
+                "rect_val": 0.0,
+                "poly_val": 0.0,
+                "poly_verts": [
+                    [
+                        0.0,
+                        100.0
+                    ],
+                    [
+                        86.6,
+                        -50.0
+                    ],
+                    [
+                        -86.6,
+                        -50.0
+                    ]
+                ]
+            }
         }
     },
     "monitors": [
         {
-            "name": "Monitor 1",
-            "z": 200.0,
-            "pos": 200.0,
+            "name": "Array_1",
+            "pos": 10.0,
             "pos_unit": "um",
+            "z": 10.0,
             "plane": 0,
             "type": 0,
-            "output_components": [],
-            "range1_min": -50.0,
-            "range1_max": 50.0,
-            "range2_min": -50.0,
-            "range2_max": 50.0
+            "output_components": []
         },
         {
-            "name": "Monitor 2",
+            "name": "Array_2",
+            "pos": 15.0,
+            "pos_unit": "um",
+            "z": 15.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_3",
+            "pos": 20.0,
+            "pos_unit": "um",
+            "z": 20.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_4",
+            "pos": 25.0,
+            "pos_unit": "um",
+            "z": 25.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_5",
+            "pos": 30.0,
+            "pos_unit": "um",
+            "z": 30.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_6",
+            "pos": 35.0,
+            "pos_unit": "um",
+            "z": 35.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_7",
+            "pos": 40.0,
+            "pos_unit": "um",
+            "z": 40.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_8",
+            "pos": 45.0,
+            "pos_unit": "um",
+            "z": 45.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_9",
+            "pos": 50.0,
+            "pos_unit": "um",
+            "z": 50.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Array_10",
+            "pos": 55.0,
+            "pos_unit": "um",
+            "z": 55.0,
+            "plane": 0,
+            "type": 0,
+            "output_components": []
+        },
+        {
+            "name": "Monitor 11",
             "z": 0.0,
             "pos": 0.0,
             "pos_unit": "mm",
@@ -130,7 +313,20 @@
             "range1_min": -50.0,
             "range1_max": 50.0,
             "range2_min": 0.0,
-            "range2_max": 300.0
+            "range2_max": 200.0
+        },
+        {
+            "name": "Monitor 12",
+            "z": 0.0,
+            "pos": 0.0,
+            "pos_unit": "mm",
+            "plane": 2,
+            "type": 0,
+            "output_components": [],
+            "range1_min": -50.0,
+            "range1_max": 50.0,
+            "range2_min": 0.0,
+            "range2_max": 200.0
         }
     ],
     "version": "1.0"

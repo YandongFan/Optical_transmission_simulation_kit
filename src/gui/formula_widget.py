@@ -49,6 +49,12 @@ class FormulaPreview(FigureCanvas):
             self.cbar = None
             
         self.cbar = self.figure.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04)
+        # Fix colorbar tick labels order (flip if inverted)
+        # Note: In matplotlib, origin='lower' puts (0,0) at bottom left.
+        # But if the axis is inverted, colorbar might look inverted. 
+        # Usually colorbar follows the data min-max.
+        self.ax.invert_yaxis() # Fix Y axis to match matrix orientation (row 0 at top)
+        
         self.draw()
 
 class FormulaWidget(QWidget):

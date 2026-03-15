@@ -15,6 +15,11 @@ from matplotlib.figure import Figure
 from .formula_widget import FormulaWidget
 from .polygon_widget import PolygonEditorWidget
 
+import json
+
+# Preset file path
+PRESET_FILE = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "preset.json")
+
 class EquationDisplay(FigureCanvas):
     def __init__(self, parent=None, width=5, height=1, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi)
@@ -152,7 +157,16 @@ class ParameterPanel(QWidget):
         # Simulation Configuration Sync
         self.config_mutex = QMutex()
         self.simulation_config = {}
-        # Initial Sync
+        
+        # Debounce timer for saving preset
+        from PyQt6.QtCore import QTimer
+        self.preset_save_timer = QTimer()
+        self.preset_save_timer.setSingleShot(True)
+        self.preset_save_timer.setInterval(1000) # Save after 1 second of inactivity
+        self.preset_save_timer.timeout.connect(self.save_preset)
+        
+        # Initial Sync & Load Preset
+        self.load_preset()
         self.sync_source_to_config()
         
     def sync_source_to_config(self):
@@ -161,6 +175,33 @@ class ParameterPanel(QWidget):
         """
         with QMutexLocker(self.config_mutex):
             self.simulation_config = self.get_project_data()
+        
+        # Trigger preset save
+        self.preset_save_timer.start()
+        
+    def save_preset(self):
+        """
+        Save current UI state to preset file
+        """
+        try:
+            data = self.get_project_data()
+            os.makedirs(os.path.dirname(PRESET_FILE), exist_ok=True)
+            with open(PRESET_FILE, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"Failed to save preset: {e}")
+
+    def load_preset(self):
+        """
+        Load UI state from preset file if it exists
+        """
+        try:
+            if os.path.exists(PRESET_FILE):
+                with open(PRESET_FILE, 'r') as f:
+                    data = json.load(f)
+                self.load_project_data(data)
+        except Exception as e:
+            print(f"Failed to load preset: {e}")
             
     def get_latest_config(self):
         """

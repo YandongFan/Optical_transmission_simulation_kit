@@ -505,6 +505,15 @@ class MainWindow(QMainWindow):
             if xy_monitors:
                 max_xy = max(m['z'] for m in xy_monitors) # m['z'] here is fixed_val_m (meters)
                 max_z = max(max_z, max_xy)
+            
+            # Check Global Monitors (YZ/XZ) for Z range coverage
+            for m in monitors_config:
+                plane_type = m.get('plane', 0)
+                if plane_type in [1, 2]: # YZ (1) or XZ (2)
+                    # For these planes, range2 is the Z-axis range
+                    z_max = m.get('range2_max', -1e9) * 1e-6 # Convert um to meters
+                    if z_max > max_z:
+                        max_z = z_max
                 
             # If max_z is small, default to 1mm
             if max_z < 1e-6: max_z = 1000e-6
@@ -512,6 +521,7 @@ class MainWindow(QMainWindow):
             # Collect critical Z points
             z_points = set()
             z_points.add(0.0)
+            z_points.add(max_z) # Ensure full range is covered
             for e in events: z_points.add(e['z'])
             for m in xy_monitors: z_points.add(m['z'])
             

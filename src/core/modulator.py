@@ -216,13 +216,15 @@ class SpatialModulator(Modulator):
             res = evaluate_formula(self.transFormula, self.customVars, 
                                    X_um, Y_um, lam_um)
             if res is not None:
-                self.amplitude_mask = np.clip(res, 0, 1)
+                amp = torch.from_numpy(np.clip(res, 0, 1)).to(device)
+                T = T * amp
 
         if self.phase_mask is None and self.phaseFormula:
             res = evaluate_formula(self.phaseFormula, self.customVars,
                                    X_um, Y_um, lam_um)
             if res is not None:
-                self.phase_mask = res
+                phi = torch.from_numpy(res).to(device)
+                T = T * torch.exp(1j * phi)
         
         if self.amplitude_mask is not None:
             amp = torch.from_numpy(self.amplitude_mask).to(device)
