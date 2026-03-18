@@ -14,7 +14,9 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from .formula_widget import FormulaWidget
 from .polygon_widget import PolygonEditorWidget
-
+from src.core.modulator import evaluate_formula
+from src.utils.mask_generator import (generate_annular_mask, generate_circular_mask, 
+                                      generate_rectangular_mask, generate_polygon_mask)
 import json
 
 # Preset file path
@@ -169,12 +171,104 @@ class ParameterPanel(QWidget):
         self.load_preset()
         self.sync_source_to_config()
         
+    def generate_geom_mask_for_preview(self, prefix, c_type, X_m, Y_m):
+        """
+        Generates geometric mask for preview using provided grid (in meters).
+        """
+        id_p = f"{prefix}_{c_type}"
+        if not hasattr(self, f"combo_shape_{id_p}"): return None
+        
+        shape_idx = getattr(self, f"combo_shape_{id_p}").currentIndex()
+        
+        # Convert grid to microns for mask generator
+        X_um = X_m * 1e6
+        Y_um = Y_m * 1e6
+        
+        mask = None
+        
+        if shape_idx == 0: # Annular
+            r_in = getattr(self, f"sb_ann_r_in_{id_p}").value()
+            r_out = getattr(self, f"sb_ann_r_out_{id_p}").value()
+            cx = getattr(self, f"sb_ann_cx_{id_p}").value()
+            cy = getattr(self, f"sb_ann_cy_{id_p}").value()
+            val = getattr(self, f"sb_ann_val_{id_p}").value()
+            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val)
+            
+        elif shape_idx == 1: # Circle
+            r = getattr(self, f"sb_cir_r_{id_p}").value()
+            cx = getattr(self, f"sb_cir_cx_{id_p}").value()
+            cy = getattr(self, f"sb_cir_cy_{id_p}").value()
+            val = getattr(self, f"sb_cir_val_{id_p}").value()
+            mask = generate_circular_mask(X_um, Y_um, cx, cy, r, val)
+            
+        elif shape_idx == 2: # Rectangle
+            w = getattr(self, f"sb_rect_w_{id_p}").value()
+            h = getattr(self, f"sb_rect_h_{id_p}").value()
+            cx = getattr(self, f"sb_rect_cx_{id_p}").value()
+            cy = getattr(self, f"sb_rect_cy_{id_p}").value()
+            rot = getattr(self, f"sb_rect_rot_{id_p}").value()
+            val = getattr(self, f"sb_rect_val_{id_p}").value()
+            mask = generate_rectangular_mask(X_um, Y_um, cx, cy, w, h, rot, val)
+            
+        elif shape_idx == 3: # Polygon
+            verts = getattr(self, f"poly_editor_{id_p}").get_vertices()
+            val = getattr(self, f"sb_poly_val_{id_p}").value()
+            mask = generate_polygon_mask(X_um, Y_um, verts, val)
+            
+        return mask
+
+    def update_phase_preview_background(self):
+        """
+        Updates the background amplitude for Phase Preview based on current Transmittance settings.
+        """
+        for prefix in ['mod1', 'mod2']:
+            if not hasattr(self, f"fw_phase_{prefix}"): continue
+            
+            fw_phase = getattr(self, f"fw_phase_{prefix}")
+            X_m, Y_m = fw_phase.get_grid_arrays()
+            
+            # Check Transmittance Mode
+            if not hasattr(self, f"mask_tabs_{prefix}"): continue
+            
+            mask_tab_idx = getattr(self, f"mask_tabs_{prefix}").currentIndex()
+            amp_mask = None
+            
+            if mask_tab_idx == 1: # Param Definition
+                trans_mode = getattr(self, f"combo_trans_mode_{prefix}").currentIndex()
+                
+                if trans_mode == 0: # Formula
+                    fw_trans = getattr(self, f"fw_trans_{prefix}")
+                    formula = fw_trans.get_formula()
+                    vars = fw_trans.custom_vars
+                    # Evaluate on preview grid
+                    try:
+                        wavelength_m = self.sb_wavelength.value() * 1e-6
+                        res = evaluate_formula(formula, vars, X_m, Y_m, wavelength_m)
+                        if res is not None:
+                            amp_mask = np.clip(res, 0, 1)
+                        else:
+                            amp_mask = np.zeros_like(X_m)
+                    except Exception:
+                        amp_mask = np.zeros_like(X_m) # Fallback on error
+                        
+                else: # Geometric
+                    amp_mask = self.generate_geom_mask_for_preview(prefix, 'trans', X_m, Y_m)
+            
+            if amp_mask is not None:
+                fw_phase.set_background_amplitude(amp_mask)
+            else:
+                # Reset if file mode or error (default 1.0)
+                fw_phase.set_background_amplitude(np.ones_like(X_m))
+
     def sync_source_to_config(self):
         """
         同步UI参数到配置对象 (Sync UI parameters to config object)
         """
         with QMutexLocker(self.config_mutex):
             self.simulation_config = self.get_project_data()
+        
+        # Update previews
+        self.update_phase_preview_background()
         
         # Trigger preset save
         self.preset_save_timer.start()

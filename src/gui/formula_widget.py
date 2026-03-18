@@ -75,6 +75,7 @@ class FormulaWidget(QWidget):
         self.formula_type = formula_type
         self.last_valid_formula = ""
         self.custom_vars = {}
+        self.background_amplitude = None # External amplitude mask for phase preview
         
         self.init_ui()
         
@@ -219,22 +220,53 @@ class FormulaWidget(QWidget):
         self.table_vars.blockSignals(False)
         self.validate_and_preview()
 
+    def get_grid_arrays(self):
+        """
+        Returns X, Y meshgrids (in meters) used for preview.
+        """
+        N = 256
+        x = np.linspace(-50e-6, 50e-6, N)
+        y = np.linspace(-50e-6, 50e-6, N)
+        return np.meshgrid(x, y)
+
+    def set_background_amplitude(self, amp_mask):
+        """
+        Sets the background amplitude mask for intensity preview (when in phase mode).
+        :param amp_mask: numpy array matching the preview grid shape
+        """
+        self.background_amplitude = amp_mask
+        
+        # Optimize: Only update intensity plot immediately, don't re-evaluate formula
+        # This ensures smooth real-time preview when dragging geometric sliders
+        if self.formula_type == 'phase':
+             if self.background_amplitude is not None:
+                 intensity_res = self.background_amplitude**2
+             else:
+                 # Default fallback
+                 intensity_res = None
+             
+             self.intensity_canvas.update_plot(intensity_res, title="Intensity (|E|^2)")
+
     def validate_and_preview(self):
         try:
             formula = self.get_formula()
+            
+            # Get grid
+            X, Y = self.get_grid_arrays()
+            
             if not formula:
                 self.lbl_error.setText("")
                 self.lbl_error.setVisible(False)
-                self.preview_canvas.update_plot(None)
-                self.intensity_canvas.update_plot(None)
+                # Still show background intensity if available?
+                # If formula is empty, phase is 0. So intensity is just background.
+                if self.formula_type == 'phase' and self.background_amplitude is not None:
+                     self.preview_canvas.update_plot(np.zeros_like(X)) # Phase 0
+                     self.intensity_canvas.update_plot(self.background_amplitude**2, title="Intensity (|E|^2)")
+                else:
+                     self.preview_canvas.update_plot(None)
+                     self.intensity_canvas.update_plot(None)
                 return
 
-            # Create dummy grid (meters, e.g. -50um to 50um)
-            N = 256
-            x = np.linspace(-50e-6, 50e-6, N)
-            y = np.linspace(-50e-6, 50e-6, N)
-            X, Y = np.meshgrid(x, y)
-            
             # Wavelength 0.532 um in meters
             res = evaluate_formula(formula, self.custom_vars, X, Y, 0.532e-6)
             
@@ -267,16 +299,19 @@ class FormulaWidget(QWidget):
                 self.lbl_error.setText("")
                 self.lbl_error.setVisible(False)
                 # Phase wrapping for preview (mod 360)
-                # We assume the result is in radians? 
-                # Requirement: "包裹算法采用模 360 运算：wrapped_phase = mod(original_phase, 360)"
-                # If the formula outputs degrees, mod 360. If radians, mod 2pi.
-                # Let's assume user expects degrees for preview wrapping as requested,
-                # or just directly wrap the numerical result by 360 if they input degrees.
-                # "wrapped_phase = mod(original_phase, 360)"
                 preview_res = np.mod(res, 360)
                 
-                # Intensity for pure phase is |exp(i*phi)|^2 = 1.0 everywhere
-                intensity_res = np.ones_like(res)
+                # Intensity for phase depends on background amplitude if set
+                if self.background_amplitude is not None:
+                     if self.background_amplitude.shape == res.shape:
+                         intensity_res = self.background_amplitude**2
+                     else:
+                         # Mismatch shape warning or fallback
+                         print("Warning: background amplitude shape mismatch")
+                         intensity_res = np.ones_like(res)
+                else:
+                    # Default unit amplitude
+                    intensity_res = np.ones_like(res)
                 
             self.preview_canvas.update_plot(preview_res, title=f"Preview ({self.formula_type.capitalize()})")
             self.intensity_canvas.update_plot(intensity_res, title="Intensity (|E|^2)")
