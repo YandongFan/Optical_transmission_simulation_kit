@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import re
 from .field import OpticalField
 
 def evaluate_formula(formula, custom_vars, x, y, wavelength):
@@ -13,13 +14,17 @@ def evaluate_formula(formula, custom_vars, x, y, wavelength):
     # Preprocess formula: Replace '^' with '**' for power operation
     # This is common in scientific notation and avoids bitwise XOR errors
     formula = formula.replace('^', '**')
+    
+    # 'lambda' is a reserved keyword in Python, so we must replace it
+    # We use regex word boundaries to only replace 'lambda' as a whole word
+    formula_mod = re.sub(r'\blambda\b', '_lambda', formula)
         
     # Context
     context = {
         'np': np,
         'x': x,
         'y': y,
-        'lambda': wavelength,
+        '_lambda': wavelength,
         'pi': np.pi,
         'sqrt': np.sqrt,
         'exp': np.exp,
@@ -35,32 +40,33 @@ def evaluate_formula(formula, custom_vars, x, y, wavelength):
         
     try:
         # Compile first to catch syntax errors cleanly
-        code = compile(formula, "<string>", "eval")
+        code = compile(formula_mod, "<string>", "eval")
         res = eval(code, {"__builtins__": {}}, context)
         
         # Ensure result is numpy array
         if np.isscalar(res):
             res = np.full_like(x, res)
         elif not isinstance(res, np.ndarray):
-            # Try to convert list/tuple to array
             res = np.array(res)
-            # If shape mismatch, might fail later, but at least it's an array
             
-        # Handle NaN and Inf to prevent crashes in visualization
+        # Handle NaN and Inf
         if np.any(np.isnan(res)) or np.any(np.isinf(res)):
-            # print(f"Warning: Formula result contains NaN or Inf")
-            # We don't want to crash or return None if only some pixels are bad
-            # Replace NaN with 0, Inf with large number?
-            # For visualization, it's better to clip or replace.
             res = np.nan_to_num(res, nan=0.0, posinf=1e10, neginf=-1e10)
             
         return res
-    except SyntaxError:
-        # Common during typing (e.g. "x *")
-        return None
+    except SyntaxError as e:
+        # Re-raise with line info for GUI catching
+        raise Exception(f"Syntax Error at line {e.lineno}, offset {e.offset}: {e.msg}")
     except Exception as e:
-        print(f"Formula evaluation error: {e}")
-        return None
+        import traceback
+        tb = traceback.extract_tb(e.__traceback__)
+        # Find the frame corresponding to the user string
+        line_no = 1
+        for frame in tb:
+            if frame.filename == "<string>":
+                line_no = frame.lineno
+                break
+        raise Exception(f"Runtime Error at line {line_no}: {str(e)}")
 
 class Modulator:
     """
@@ -206,22 +212,21 @@ class SpatialModulator(Modulator):
         # Prepare modulation tensor
         T = torch.ones((self.grid.ny, self.grid.nx), dtype=torch.complex64, device=device)
         
-        # Check Formula if mask is None
-        # Convert to microns for formula evaluation (User expects um)
-        X_um = self.grid.X * 1e6
-        Y_um = self.grid.Y * 1e6
-        lam_um = self.grid.wavelength * 1e6
+        # Use SI units (meters) for formula evaluation to ensure dimensional consistency
+        X_m = self.grid.X
+        Y_m = self.grid.Y
+        lam_m = self.grid.wavelength
         
         if self.amplitude_mask is None and self.transFormula:
             res = evaluate_formula(self.transFormula, self.customVars, 
-                                   X_um, Y_um, lam_um)
+                                   X_m, Y_m, lam_m)
             if res is not None:
                 amp = torch.from_numpy(np.clip(res, 0, 1)).to(device)
                 T = T * amp
 
         if self.phase_mask is None and self.phaseFormula:
             res = evaluate_formula(self.phaseFormula, self.customVars,
-                                   X_um, Y_um, lam_um)
+                                   X_m, Y_m, lam_m)
             if res is not None:
                 phi = torch.from_numpy(res).to(device)
                 T = T * torch.exp(1j * phi)

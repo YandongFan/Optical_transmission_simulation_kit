@@ -16,21 +16,21 @@ def test_custom_formula_mod1():
     field.Ex = torch.ones((ny, nx), dtype=torch.complex64)
     field.Ey = torch.zeros((ny, nx), dtype=torch.complex64)
     
-    # Formula (using microns)
-    # We want Trans ~ 1.0. lambda is 0.7.
-    # Formula: sin(x/10) * (lambda / 0.7)
-    trans_formula = "np.sin(x/10) * (lambda / 0.7)" 
-    phase_formula = "x**2 + y**2"
+    # Formula (using meters)
+    # We want Trans ~ 1.0. lambda is 0.7e-6.
+    # Formula: sin(x * 1e6 / 10) * (lambda / 0.7e-6)
+    trans_formula = "np.sin(x * 1e6 / 10) * (lambda / 0.7e-6)" 
+    phase_formula = "(x * 1e6)**2 + (y * 1e6)**2"
     
-    # Expected calculations (using microns)
-    X_um = grid.X * 1e6
-    Y_um = grid.Y * 1e6
-    lam_um = wavelength
+    # Expected calculations (using meters, as updated)
+    X_m = grid.X
+    Y_m = grid.Y
+    lam_m = grid.wavelength
     
-    expected_trans = np.sin(X_um/10) * (lam_um/0.7)
+    expected_trans = np.sin(X_m * 1e6 / 10) * (lam_m / 0.7e-6)
     expected_trans = np.clip(expected_trans, 0, 1)
     
-    expected_phase = X_um**2 + Y_um**2
+    expected_phase = (X_m * 1e6)**2 + (Y_m * 1e6)**2
     
     mod = SpatialModulator(grid, 
                            transFormula=trans_formula, 

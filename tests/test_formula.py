@@ -47,12 +47,12 @@ def test_evaluate_formula_errors():
     y = np.zeros(5)
     
     # Syntax error
-    res = evaluate_formula("x * ", {}, x, y, 1.0)
-    assert res is None
+    with pytest.raises(Exception, match="Syntax Error"):
+        evaluate_formula("x * ", {}, x, y, 1.0)
     
     # Unknown variable
-    res = evaluate_formula("unknown_var", {}, x, y, 1.0)
-    assert res is None
+    with pytest.raises(Exception, match="Runtime Error"):
+        evaluate_formula("unknown_var", {}, x, y, 1.0)
 
 def test_evaluate_formula_coordinates():
     # Test r, theta, phi
@@ -69,3 +69,24 @@ def test_evaluate_formula_coordinates():
     res_theta = evaluate_formula("theta", {}, x, y, 1.0)
     expected = np.array([0, np.pi/2, np.pi])
     assert np.allclose(res_theta, expected)
+
+def test_evaluate_formula_annular_phase():
+    # Phase formula: -2*pi/lambda*(sqrt((x-x0)^2+(y-y0)^2+f^2)-f)
+    x = np.array([20e-6, 0.0, -20e-6])
+    y = np.array([0.0, 20e-6, 0.0])
+    wavelength = 0.532e-6
+    custom_vars = {'f': 50e-6, 'x0': 0.0, 'y0': 0.0}
+    formula = "-2*pi/lambda*(sqrt((x-x0)^2+(y-y0)^2+f^2)-f)"
+    
+    res = evaluate_formula(formula, custom_vars, x, y, wavelength)
+    
+    # Expected analytical calculation
+    # For point (20e-6, 0): r = 20e-6
+    # sqrt(r^2 + f^2) - f = sqrt((20e-6)^2 + (50e-6)^2) - 50e-6 = 10e-6 * (sqrt(2^2 + 5^2) - 5)
+    # sqrt(29) - 5 = 5.3851648 - 5 = 0.3851648
+    # value = 3.851648e-6
+    # phase = -2*pi / (0.532e-6) * 3.851648e-6 = -2*pi * 7.2399... = -45.4899...
+    r_sq = x**2 + y**2
+    expected = -2 * np.pi / wavelength * (np.sqrt(r_sq + custom_vars['f']**2) - custom_vars['f'])
+    
+    assert np.allclose(res, expected, atol=1e-6)

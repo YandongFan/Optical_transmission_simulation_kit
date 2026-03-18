@@ -12,13 +12,14 @@ import re
 from src.core.modulator import evaluate_formula
 
 class FormulaPreview(FigureCanvas):
-    def __init__(self, parent=None, width=4, height=3, dpi=100):
+    def __init__(self, parent=None, width=4, height=3, dpi=100, is_intensity=False):
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.ax = fig.add_subplot(111)
         self.ax.axis('off')
         super().__init__(fig)
         self.setParent(parent)
         self.cbar = None
+        self.is_intensity = is_intensity
 
     def update_plot(self, data, title="Preview"):
         self.ax.clear()
@@ -38,7 +39,8 @@ class FormulaPreview(FigureCanvas):
             self.draw()
             return
 
-        im = self.ax.imshow(data, cmap='viridis', origin='lower')
+        cmap = 'gray' if self.is_intensity else 'viridis'
+        im = self.ax.imshow(data, cmap=cmap, origin='lower')
         
         # Recreate colorbar safely
         if self.cbar:
@@ -50,11 +52,13 @@ class FormulaPreview(FigureCanvas):
             
         self.cbar = self.figure.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04)
         # Fix colorbar tick labels order (flip if inverted)
-        # Note: In matplotlib, origin='lower' puts (0,0) at bottom left.
-        # But if the axis is inverted, colorbar might look inverted. 
-        # Usually colorbar follows the data min-max.
         self.ax.invert_yaxis() # Fix Y axis to match matrix orientation (row 0 at top)
         
+        # Optionally mark min/max on title or axes for intensity
+        if self.is_intensity:
+            d_min, d_max = np.min(data), np.max(data)
+            self.ax.set_title(f"{title} [Min: {d_min:.2f}, Max: {d_max:.2f}]", fontsize=9)
+            
         self.draw()
 
 class FormulaWidget(QWidget):
@@ -143,8 +147,20 @@ class FormulaWidget(QWidget):
         preview_layout = QVBoxLayout(preview_widget)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.preview_canvas = FormulaPreview(width=3, height=3)
-        preview_layout.addWidget(self.preview_canvas)
+        # We need two previews if phase, else one?
+        # Requirement: "In the same Parameter Definition interface, add an Intensity Preview next to Phase"
+        # Since FormulaWidget is used for both 'trans' and 'phase', we can show both for both, 
+        # or conditionally. Let's just stack them vertically or horizontally.
+        preview_split = QSplitter(Qt.Orientation.Vertical)
+        
+        self.preview_canvas = FormulaPreview(width=3, height=2)
+        preview_split.addWidget(self.preview_canvas)
+        
+        # Intensity Canvas
+        self.intensity_canvas = FormulaPreview(width=3, height=2, is_intensity=True)
+        preview_split.addWidget(self.intensity_canvas)
+        
+        preview_layout.addWidget(preview_split)
         
         splitter.addWidget(preview_widget)
         splitter.setStretchFactor(0, 3)
@@ -210,44 +226,73 @@ class FormulaWidget(QWidget):
                 self.lbl_error.setText("")
                 self.lbl_error.setVisible(False)
                 self.preview_canvas.update_plot(None)
+                self.intensity_canvas.update_plot(None)
                 return
 
-            # Create dummy grid
+            # Create dummy grid (meters, e.g. -50um to 50um)
             N = 256
-            x = np.linspace(-100, 100, N)
-            y = np.linspace(-100, 100, N)
+            x = np.linspace(-50e-6, 50e-6, N)
+            y = np.linspace(-50e-6, 50e-6, N)
             X, Y = np.meshgrid(x, y)
             
-            res = evaluate_formula(formula, self.custom_vars, X, Y, 0.532)
+            # Wavelength 0.532 um in meters
+            res = evaluate_formula(formula, self.custom_vars, X, Y, 0.532e-6)
             
             if res is None:
                 self.lbl_error.setText("Error: Evaluation Failed")
                 self.lbl_error.setVisible(True)
                 self.preview_canvas.update_plot(None)
+                self.intensity_canvas.update_plot(None)
                 self.formulaChanged.emit("invalid")
                 return
                 
             # Validation for Trans (0-1)
+            intensity_res = None
+            preview_res = res
+            
             if self.formula_type == 'trans':
                 if np.any(res < 0) or np.any(res > 1):
                     self.lbl_error.setText("Warning: Values out of range [0, 1] (clamped for preview)")
                     self.lbl_error.setVisible(True)
                     res = np.clip(res, 0, 1)
+                    preview_res = res
                 else:
                     self.lbl_error.setText("")
                     self.lbl_error.setVisible(False)
-            else:
+                    
+                # Intensity for trans is |T|^2
+                intensity_res = np.abs(res)**2
+                
+            elif self.formula_type == 'phase':
                 self.lbl_error.setText("")
                 self.lbl_error.setVisible(False)
+                # Phase wrapping for preview (mod 360)
+                # We assume the result is in radians? 
+                # Requirement: "包裹算法采用模 360 运算：wrapped_phase = mod(original_phase, 360)"
+                # If the formula outputs degrees, mod 360. If radians, mod 2pi.
+                # Let's assume user expects degrees for preview wrapping as requested,
+                # or just directly wrap the numerical result by 360 if they input degrees.
+                # "wrapped_phase = mod(original_phase, 360)"
+                preview_res = np.mod(res, 360)
                 
-            self.preview_canvas.update_plot(res, title="Preview (256x256)")
+                # Intensity for pure phase is |exp(i*phi)|^2 = 1.0 everywhere
+                intensity_res = np.ones_like(res)
+                
+            self.preview_canvas.update_plot(preview_res, title=f"Preview ({self.formula_type.capitalize()})")
+            self.intensity_canvas.update_plot(intensity_res, title="Intensity (|E|^2)")
+            
             self.last_valid_formula = formula
             self.formulaChanged.emit("valid")
         except Exception as e:
             # Catch all GUI-level exceptions during validation
             print(f"Validation crash prevented: {e}")
-            self.lbl_error.setText(f"System Error: {str(e)}")
+            
+            # The exception from evaluate_formula already has line number formatted
+            err_msg = str(e)
+            
+            self.lbl_error.setText(f"System Error: {err_msg}")
             self.lbl_error.setVisible(True)
             self.preview_canvas.update_plot(None)
+            self.intensity_canvas.update_plot(None)
             self.formulaChanged.emit("invalid")
 
