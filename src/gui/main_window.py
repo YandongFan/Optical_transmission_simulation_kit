@@ -31,9 +31,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         
-        # Menu Bar
-        self.create_menu_bar()
-        
         # Splitter for resizable panels
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
@@ -45,6 +42,9 @@ class MainWindow(QMainWindow):
         # Right: Visualization Panel
         self.visualization_panel = VisualizationPanel()
         splitter.addWidget(self.visualization_panel)
+        
+        # Menu Bar (Load View Settings needs visualization_panel)
+        self.create_menu_bar()
         
         # Set initial sizes (Left smaller, Right larger)
         splitter.setSizes([400, 800])
@@ -91,6 +91,44 @@ class MainWindow(QMainWindow):
         load_action.setShortcut("Ctrl+O")
         load_action.triggered.connect(self.load_project)
         file_menu.addAction(load_action)
+
+        view_menu = menubar.addMenu("视图 (View)")
+        
+        self.hover_action = QAction("鼠标悬停提示 (Mouse Hover Tooltip)", self, checkable=True)
+        self.hover_action.setChecked(True)
+        self.hover_action.triggered.connect(self.toggle_hover_tooltip)
+        view_menu.addAction(self.hover_action)
+        
+        # Load state
+        self.load_view_settings()
+
+    def toggle_hover_tooltip(self, checked):
+        self.visualization_panel.set_hover_enabled(checked)
+        self.save_view_settings()
+
+    def save_view_settings(self):
+        settings_file = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "view_settings.json")
+        os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+        data = {'hover_enabled': self.hover_action.isChecked()}
+        try:
+            with open(settings_file, 'w') as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    def load_view_settings(self):
+        settings_file = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "view_settings.json")
+        if os.path.exists(settings_file):
+            try:
+                with open(settings_file, 'r') as f:
+                    data = json.load(f)
+                enabled = data.get('hover_enabled', True)
+                self.hover_action.setChecked(enabled)
+                self.visualization_panel.set_hover_enabled(enabled)
+            except Exception:
+                pass
+        else:
+            self.visualization_panel.set_hover_enabled(True)
 
     def save_project(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Project Files (*.proj)")

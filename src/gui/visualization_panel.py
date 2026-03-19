@@ -212,6 +212,16 @@ class VisualizationPanel(QWidget):
         while self.tabs.count() > 3:
             self.tabs.removeTab(3)
 
+    def set_hover_enabled(self, enabled):
+        if hasattr(self, 'canvas_intensity'):
+            self.canvas_intensity.set_hover_enabled(enabled)
+            self.canvas_phase.set_hover_enabled(enabled)
+            self.canvas_cross.set_hover_enabled(enabled)
+        else:
+            self.intensity_canvas.set_hover_enabled(enabled)
+            self.phase_canvas.set_hover_enabled(enabled)
+            self.cross_section_canvas.set_hover_enabled(enabled)
+
     def add_monitor_result(self, name, field_data, intensity_data, phase_data, x, y, components=None, plane_type=0, enabled=True):
         """
         添加监视器结果数据
@@ -283,6 +293,8 @@ class VisualizationPanel(QWidget):
             
             def create_tab(title, data_arr, cmap='viridis', is_line=False):
                 canvas = PlotCanvas(dialog)
+                hover_state = getattr(self, 'intensity_canvas', getattr(self, 'canvas_intensity', None)).hover_enabled if getattr(self, 'intensity_canvas', getattr(self, 'canvas_intensity', None)) else True
+                canvas.set_hover_enabled(hover_state) # inherit state
                 if is_line:
                     mid = data_arr.shape[0] // 2
                     if data['x'].ndim == 2:
@@ -474,10 +486,40 @@ class PlotCanvas(FigureCanvas):
     """
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
-        super().__init__(self.fig)
+        super(PlotCanvas, self).__init__(self.fig)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.updateGeometry()
+        
+        # Hover tooltip state
+        self.hover_enabled = True
+        self.current_data = None
+        self.current_extent = None
+        self.current_type = None # 'heatmap', 'dual_heatmap', 'line'
+        
+        # Data for dual heatmap
+        self.current_data1 = None
+        self.current_data2 = None
+        
+        # Tooltip annotation
+        self.annot = None
+        self.annot1 = None
+        self.annot2 = None
+        
+        # Timers for hover delay
+        self.hover_timer = QTimer()
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.timeout.connect(self.show_tooltip)
+        
+        self.hide_timer = QTimer()
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide_tooltip)
+        
+        self.last_event = None
+        
+        # Connect events
+        self.fig.canvas.mpl_connect("motion_notify_event", self.on_mouse_move)
+        self.fig.canvas.mpl_connect("axes_leave_event", self.on_axes_leave)
 
     def resizeEvent(self, event):
         """
@@ -491,12 +533,25 @@ class PlotCanvas(FigureCanvas):
         """
         绘制热图 (Intensity/Phase)
         """
+        self.current_type = 'heatmap'
+        self.current_data = data
+        self.current_extent = extent
+        self.current_xlabel = xlabel
+        self.current_ylabel = ylabel
+        
         self.fig.clf() 
         ax = self.fig.add_subplot(111)
         im = ax.imshow(data, extent=extent, origin='lower', cmap=cmap, aspect='auto')
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
+        
+        # Setup annotation
+        self.annot = ax.annotate("", xy=(0,0), xytext=(20,-20), textcoords="offset points",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+                            arrowprops=None)
+        self.annot.set_visible(False)
+        self.current_ax = ax
         
         if mode == 'square': # Axis Square (MATLAB style)
             # 强制坐标轴框为正方形，并确保物理 1:1 比例
@@ -533,6 +588,13 @@ class PlotCanvas(FigureCanvas):
         """
         绘制双热图 (用于分量显示)
         """
+        self.current_type = 'dual_heatmap'
+        self.current_data1 = data1
+        self.current_data2 = data2
+        self.current_extent = extent
+        self.current_xlabel = xlabel
+        self.current_ylabel = ylabel
+        
         self.fig.clf()
         
         # Subplot 1
@@ -543,6 +605,13 @@ class PlotCanvas(FigureCanvas):
         ax1.set_ylabel(ylabel)
         self.fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
         
+        # Setup annotation 1
+        self.annot1 = ax1.annotate("", xy=(0,0), xytext=(20,-20), textcoords="offset points",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+                            arrowprops=None)
+        self.annot1.set_visible(False)
+        self.ax1 = ax1
+        
         # Subplot 2
         ax2 = self.fig.add_subplot(122)
         im2 = ax2.imshow(data2, extent=extent, origin='lower', cmap=cmap2, aspect='auto')
@@ -550,6 +619,13 @@ class PlotCanvas(FigureCanvas):
         ax2.set_xlabel(xlabel)
         ax2.set_ylabel(ylabel)
         self.fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+        
+        # Setup annotation 2
+        self.annot2 = ax2.annotate("", xy=(0,0), xytext=(20,-20), textcoords="offset points",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+                            arrowprops=None)
+        self.annot2.set_visible(False)
+        self.ax2 = ax2
         
         # 应用显示模式
         if mode == 'square':
@@ -580,15 +656,149 @@ class PlotCanvas(FigureCanvas):
         """
         绘制曲线图 (截面)
         """
+        self.current_type = 'line'
+        self.current_x = x
+        self.current_y = y
+        self.current_xlabel = xlabel
+        self.current_ylabel = ylabel
+        
         self.fig.clf()
         ax = self.fig.add_subplot(111)
-        
-        ax.plot(x, y)
+        ax.plot(x, y, 'b-')
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.grid(True)
+        
+        # Setup annotation
+        self.annot = ax.annotate("", xy=(0,0), xytext=(20,-20), textcoords="offset points",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+                            arrowprops=None)
+        self.annot.set_visible(False)
+        self.current_ax = ax
+        
+        self.fig.tight_layout()
         self.draw()
+
+    # Hover interactions
+    def set_hover_enabled(self, enabled):
+        self.hover_enabled = enabled
+        if not enabled:
+            self.hide_tooltip()
+
+    def on_mouse_move(self, event):
+        if not self.hover_enabled or not event.inaxes:
+            self.hide_tooltip()
+            return
+            
+        self.last_event = event
+        self.hide_timer.stop()
+        self.hover_timer.start(200) # 200ms delay before show
+
+    def on_axes_leave(self, event):
+        self.hover_timer.stop()
+        self.hide_timer.start(150) # 150ms delay before hide
+
+    def hide_tooltip(self):
+        if hasattr(self, 'annot') and self.annot and self.annot.get_visible():
+            self.annot.set_visible(False)
+            self.draw_idle()
+        if hasattr(self, 'annot1') and self.annot1 and self.annot1.get_visible():
+            self.annot1.set_visible(False)
+            self.draw_idle()
+        if hasattr(self, 'annot2') and self.annot2 and self.annot2.get_visible():
+            self.annot2.set_visible(False)
+            self.draw_idle()
+
+    def get_interpolated_z(self, x, y, extent, data):
+        """Bilinear interpolation for Z value"""
+        x_min, x_max, y_min, y_max = extent
+        ny, nx = data.shape
+        
+        # Convert physical coordinates to fractional indices
+        px = (x - x_min) / (x_max - x_min) * (nx - 1)
+        py = (y - y_min) / (y_max - y_min) * (ny - 1)
+        
+        if px < 0 or px > nx - 1 or py < 0 or py > ny - 1:
+            return None
+            
+        x0, y0 = int(np.floor(px)), int(np.floor(py))
+        x1, y1 = min(x0 + 1, nx - 1), min(y0 + 1, ny - 1)
+        
+        dx = px - x0
+        dy = py - y0
+        
+        # In imshow, origin='lower' means data[0,0] is at bottom-left
+        v00 = data[y0, x0]
+        v10 = data[y0, x1]
+        v01 = data[y1, x0]
+        v11 = data[y1, x1]
+        
+        z = (1 - dx) * (1 - dy) * v00 + dx * (1 - dy) * v10 + (1 - dx) * dy * v01 + dx * dy * v11
+        return z
+
+    def get_1d_interpolated_y(self, x, x_arr, y_arr):
+        """Linear interpolation for 1D array"""
+        if x < x_arr[0] or x > x_arr[-1]:
+            return None
+        return np.interp(x, x_arr, y_arr)
+
+    def show_tooltip(self):
+        event = self.last_event
+        if not event or not event.inaxes: return
+        
+        ax = event.inaxes
+        x, y = event.xdata, event.ydata
+        
+        if self.current_type == 'heatmap':
+            if ax != self.current_ax: return
+            z = self.get_interpolated_z(x, y, self.current_extent, self.current_data)
+            if z is None: return
+            
+            unit = "a.u."
+            if "强度" in ax.get_title() or "Intensity" in ax.get_title():
+                unit = "W/m²" # Or match current unit
+            elif "相位" in ax.get_title() or "Phase" in ax.get_title():
+                unit = "rad"
+                
+            text = f"X: {x:.3g} {self.current_xlabel.split(' ')[-1].strip('()')}\nY: {y:.3g} {self.current_ylabel.split(' ')[-1].strip('()')}\nZ: {z:.4e} {unit}"
+            self.annot.xy = (x, y)
+            self.annot.set_text(text)
+            self.annot.set_visible(True)
+            self.draw_idle()
+            
+        elif self.current_type == 'dual_heatmap':
+            if ax == self.ax1:
+                z = self.get_interpolated_z(x, y, self.current_extent, self.current_data1)
+                annot = self.annot1
+                unit = "W/m²" if "强度" in ax.get_title() or "Intensity" in ax.get_title() else "a.u."
+            elif ax == self.ax2:
+                z = self.get_interpolated_z(x, y, self.current_extent, self.current_data2)
+                annot = self.annot2
+                unit = "rad" if "相位" in ax.get_title() or "Phase" in ax.get_title() else "a.u."
+            else:
+                return
+                
+            if z is None: return
+            text = f"X: {x:.3g} {self.current_xlabel.split(' ')[-1].strip('()')}\nY: {y:.3g} {self.current_ylabel.split(' ')[-1].strip('()')}\nZ: {z:.4e} {unit}"
+            annot.xy = (x, y)
+            annot.set_text(text)
+            annot.set_visible(True)
+            self.draw_idle()
+            
+        elif self.current_type == 'line':
+            if ax != self.current_ax: return
+            y_val = self.get_1d_interpolated_y(x, self.current_x, self.current_y)
+            if y_val is None: return
+            
+            unit = self.current_ylabel.split(' ')[-1].strip('()') if ' ' in self.current_ylabel else ""
+            x_unit = self.current_xlabel.split(' ')[-1].strip('()') if ' ' in self.current_xlabel else ""
+            
+            text = f"X: {x:.3g} {x_unit}\nY: {y_val:.4e} {unit}"
+            self.annot.xy = (x, y_val)
+            self.annot.set_text(text)
+            self.annot.set_visible(True)
+            self.draw_idle()
         
     def clear(self):
         self.fig.clf()
