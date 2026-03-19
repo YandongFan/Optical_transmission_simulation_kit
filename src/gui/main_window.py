@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
             
         try:
             data = self.parameter_panel.get_project_data()
-            data['version'] = '1.0'
+            data['version'] = '1.4'
             
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=4)
@@ -119,8 +119,13 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
                 
             # Version check (basic)
-            if 'version' not in data:
-                print("Warning: No version found in project file.")
+            version = data.get('version', '1.0')
+            if version < '1.4':
+                print(f"Warning: Project file version is {version}, upgrading to 1.4...")
+                QMessageBox.information(self, "版本兼容性提示 (Compatibility)", 
+                                      f"检测到旧版本工程文件 (v{version})。\n\n"
+                                      "已自动为您补全缺失字段 (如圆环起始/结束角度)，并升级至 v1.4 标准。\n"
+                                      "请在确认无误后重新保存。")
                 
             self.parameter_panel.load_project_data(data)
             self.on_preview()
@@ -663,8 +668,10 @@ class MainWindow(QMainWindow):
             r_out = getattr(pp, f"sb_ann_r_out_{id_p}").value()
             cx = getattr(pp, f"sb_ann_cx_{id_p}").value()
             cy = getattr(pp, f"sb_ann_cy_{id_p}").value()
+            start_angle = getattr(pp, f"sb_ann_angle_start_{id_p}").value()
+            end_angle = getattr(pp, f"sb_ann_angle_end_{id_p}").value()
             val = getattr(pp, f"sb_ann_val_{id_p}").value()
-            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val)
+            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val, start_angle, end_angle)
             
         elif shape_idx == 1: # Circle
             r = getattr(pp, f"sb_cir_r_{id_p}").value()

@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QGroupBox,
                              QComboBox, QPushButton, QFormLayout, QScrollArea, QFileDialog,
                              QListWidget, QHBoxLayout, QMessageBox, QCheckBox, QDialog,
                              QSpinBox, QLineEdit, QTableWidget, QTableWidgetItem, QTextEdit,
-                             QStackedWidget, QHeaderView)
+                             QStackedWidget, QHeaderView, QSlider)
 from PyQt6.QtGui import QAction, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, pyqtSignal as Signal, QMutex, QMutexLocker
 import numpy as np
@@ -191,8 +191,10 @@ class ParameterPanel(QWidget):
             r_out = getattr(self, f"sb_ann_r_out_{id_p}").value()
             cx = getattr(self, f"sb_ann_cx_{id_p}").value()
             cy = getattr(self, f"sb_ann_cy_{id_p}").value()
+            start_angle = getattr(self, f"sb_ann_angle_start_{id_p}").value()
+            end_angle = getattr(self, f"sb_ann_angle_end_{id_p}").value()
             val = getattr(self, f"sb_ann_val_{id_p}").value()
-            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val)
+            mask = generate_annular_mask(X_um, Y_um, cx, cy, r_in, r_out, val, start_angle, end_angle)
             
         elif shape_idx == 1: # Circle
             r = getattr(self, f"sb_cir_r_{id_p}").value()
@@ -679,14 +681,75 @@ class ParameterPanel(QWidget):
         _, sb_ann_r_out = create_param_row("外径 (Outer R):", 100.0, min_val=0.0)
         _, sb_ann_cx = create_param_row("中心 X (Center X):", 0.0)
         _, sb_ann_cy = create_param_row("中心 Y (Center Y):", 0.0)
+        
+        # New angle parameters
+        _, sb_ann_angle_start = create_param_row("起始角度 (Start Angle):", 0.0, suffix="°", min_val=0.0, max_val=360.0)
+        sb_ann_angle_start.setSingleStep(1.0)
+        sl_ann_angle_start = QSlider(Qt.Orientation.Horizontal)
+        sl_ann_angle_start.setRange(0, 360)
+        sl_ann_angle_start.setValue(0)
+        
+        _, sb_ann_angle_end = create_param_row("结束角度 (End Angle):", 360.0, suffix="°", min_val=0.0, max_val=360.0)
+        sb_ann_angle_end.setSingleStep(1.0)
+        sl_ann_angle_end = QSlider(Qt.Orientation.Horizontal)
+        sl_ann_angle_end.setRange(0, 360)
+        sl_ann_angle_end.setValue(360)
+        
+        # Sync SpinBox and Slider
+        def sync_start_sb_to_sl(val):
+            sl_ann_angle_start.blockSignals(True)
+            sl_ann_angle_start.setValue(int(val))
+            sl_ann_angle_start.blockSignals(False)
+        def sync_start_sl_to_sb(val):
+            sb_ann_angle_start.blockSignals(True)
+            sb_ann_angle_start.setValue(float(val))
+            sb_ann_angle_start.blockSignals(False)
+            sb_ann_angle_start.valueChanged.emit(float(val))
+            
+        sb_ann_angle_start.valueChanged.connect(sync_start_sb_to_sl)
+        sl_ann_angle_start.valueChanged.connect(sync_start_sl_to_sb)
+        
+        def sync_end_sb_to_sl(val):
+            sl_ann_angle_end.blockSignals(True)
+            sl_ann_angle_end.setValue(int(val))
+            sl_ann_angle_end.blockSignals(False)
+        def sync_end_sl_to_sb(val):
+            sb_ann_angle_end.blockSignals(True)
+            sb_ann_angle_end.setValue(float(val))
+            sb_ann_angle_end.blockSignals(False)
+            sb_ann_angle_end.valueChanged.emit(float(val))
+            
+        sb_ann_angle_end.valueChanged.connect(sync_end_sb_to_sl)
+        sl_ann_angle_end.valueChanged.connect(sync_end_sl_to_sb)
+        
         _, sb_ann_val = create_param_row(val_label, 1.0 if comp_type=='trans' else 0.0, suffix="", min_val=val_range[0], max_val=val_range[1])
         if comp_type == 'trans': sb_ann_val.setSingleStep(0.1)
+        
+        lbl_ann_error = QLabel("错误：结束角度必须大于起始角度")
+        lbl_ann_error.setStyleSheet("color: red;")
+        lbl_ann_error.setVisible(False)
         
         pa_layout.addRow("内径 (Inner R):", sb_ann_r_in)
         pa_layout.addRow("外径 (Outer R):", sb_ann_r_out)
         pa_layout.addRow("中心 X (Center X):", sb_ann_cx)
         pa_layout.addRow("中心 Y (Center Y):", sb_ann_cy)
+        
+        w_start = QWidget()
+        l_start = QHBoxLayout(w_start)
+        l_start.setContentsMargins(0,0,0,0)
+        l_start.addWidget(sl_ann_angle_start)
+        l_start.addWidget(sb_ann_angle_start)
+        pa_layout.addRow("起始角度 (Start Angle):", w_start)
+        
+        w_end = QWidget()
+        l_end = QHBoxLayout(w_end)
+        l_end.setContentsMargins(0,0,0,0)
+        l_end.addWidget(sl_ann_angle_end)
+        l_end.addWidget(sb_ann_angle_end)
+        pa_layout.addRow("结束角度 (End Angle):", w_end)
+        
         pa_layout.addRow(val_label, sb_ann_val)
+        pa_layout.addRow(lbl_ann_error)
         shape_stack.addWidget(page_annular)
         
         # 1: Circle
@@ -743,13 +806,29 @@ class ParameterPanel(QWidget):
         
         # Connect signals to sync
         combo_shape.currentIndexChanged.connect(self.sync_source_to_config)
-        for w in [sb_ann_r_in, sb_ann_r_out, sb_ann_cx, sb_ann_cy, sb_ann_val,
+        for w in [sb_ann_r_in, sb_ann_r_out, sb_ann_cx, sb_ann_cy, sb_ann_angle_start, sb_ann_angle_end, sb_ann_val,
                   sb_cir_r, sb_cir_cx, sb_cir_cy, sb_cir_val,
                   sb_rect_w, sb_rect_h, sb_rect_cx, sb_rect_cy, sb_rect_rot, sb_rect_val,
                   sb_poly_val]:
             w.valueChanged.connect(self.sync_source_to_config)
             
         poly_editor.dataChanged.connect(self.sync_source_to_config)
+        
+        # Validation for annular angles
+        def check_annular_angles():
+            start_val = sb_ann_angle_start.value()
+            end_val = sb_ann_angle_end.value()
+            if end_val <= start_val:
+                lbl_ann_error.setVisible(True)
+                self.btn_preview.setEnabled(False)
+                self.btn_run.setEnabled(False)
+            else:
+                lbl_ann_error.setVisible(False)
+                self.btn_preview.setEnabled(True)
+                self.btn_run.setEnabled(True)
+                
+        sb_ann_angle_start.valueChanged.connect(check_annular_angles)
+        sb_ann_angle_end.valueChanged.connect(check_annular_angles)
         
         # Store refs dynamically
         id_prefix = f"{prefix}_{comp_type}"
@@ -761,6 +840,10 @@ class ParameterPanel(QWidget):
         setattr(self, f"sb_ann_r_out_{id_prefix}", sb_ann_r_out)
         setattr(self, f"sb_ann_cx_{id_prefix}", sb_ann_cx)
         setattr(self, f"sb_ann_cy_{id_prefix}", sb_ann_cy)
+        setattr(self, f"sb_ann_angle_start_{id_prefix}", sb_ann_angle_start)
+        setattr(self, f"sl_ann_angle_start_{id_prefix}", sl_ann_angle_start)
+        setattr(self, f"sb_ann_angle_end_{id_prefix}", sb_ann_angle_end)
+        setattr(self, f"sl_ann_angle_end_{id_prefix}", sl_ann_angle_end)
         setattr(self, f"sb_ann_val_{id_prefix}", sb_ann_val)
         
         # Circle
@@ -1676,6 +1759,8 @@ class ParameterPanel(QWidget):
                         'ann_r_out': getattr(self, f"sb_ann_r_out_{id_p}").value(),
                         'ann_cx': getattr(self, f"sb_ann_cx_{id_p}").value(),
                         'ann_cy': getattr(self, f"sb_ann_cy_{id_p}").value(),
+                        'ringStartAngle': getattr(self, f"sb_ann_angle_start_{id_p}").value(),
+                        'ringEndAngle': getattr(self, f"sb_ann_angle_end_{id_p}").value(),
                         'ann_val': getattr(self, f"sb_ann_val_{id_p}").value(),
                         
                         'cir_r': getattr(self, f"sb_cir_r_{id_p}").value(),
@@ -1810,6 +1895,8 @@ class ParameterPanel(QWidget):
                             getattr(self, f"sb_ann_r_out_{id_p}").setValue(g_data.get('ann_r_out', 100.0))
                             getattr(self, f"sb_ann_cx_{id_p}").setValue(g_data.get('ann_cx', 0.0))
                             getattr(self, f"sb_ann_cy_{id_p}").setValue(g_data.get('ann_cy', 0.0))
+                            getattr(self, f"sb_ann_angle_start_{id_p}").setValue(g_data.get('ringStartAngle', 0.0))
+                            getattr(self, f"sb_ann_angle_end_{id_p}").setValue(g_data.get('ringEndAngle', 360.0))
                             getattr(self, f"sb_ann_val_{id_p}").setValue(g_data.get('ann_val', 1.0))
                             
                             getattr(self, f"sb_cir_r_{id_p}").setValue(g_data.get('cir_r', 100.0))
