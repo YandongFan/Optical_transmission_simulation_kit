@@ -9,7 +9,9 @@ from PyQt6.QtCore import Qt, pyqtSignal as Signal, QMutex, QMutexLocker
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
+import h5py
 import os
+import glob
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from .formula_widget import FormulaWidget
@@ -1985,7 +1987,21 @@ class ParameterPanel(QWidget):
         else:
             filename = path
             
-        if not filename or not os.path.exists(filename):
+        if not filename:
+            return
+        
+        # 支持通配符或可变字符的文件名
+        if any(ch in filename for ch in ['*', '?', '[', ']']):
+            matches = sorted(glob.glob(filename))
+            if not matches:
+                if path is None:
+                    QMessageBox.critical(self, "Error", "未找到匹配的文件")
+                else:
+                    print(f"未找到匹配的文件: {filename}")
+                return
+            filename = matches[0]
+
+        if not os.path.exists(filename):
             return
             
         try:
@@ -1994,10 +2010,21 @@ class ParameterPanel(QWidget):
                 df = pd.read_csv(filename, header=None)
                 data = df.values
             elif filename.endswith('.mat'):
-                mat = loadmat(filename)
-                keys = [k for k in mat.keys() if not k.startswith('__')]
-                if keys:
-                    data = mat[keys[0]]
+                try:
+                    mat = loadmat(filename)
+                    keys = [k for k in mat.keys() if not k.startswith('__')]
+                    if keys:
+                        data = mat[keys[0]]
+                except Exception:
+                    # 兼容 MATLAB v7.3 (HDF5) 格式
+                    with h5py.File(filename, 'r') as f:
+                        datasets = []
+                        def collect(name, obj):
+                            if isinstance(obj, h5py.Dataset):
+                                datasets.append(obj)
+                        f.visititems(collect)
+                        if datasets:
+                            data = datasets[0][()]
             
             if data is not None:
                 if target == 'phase1':
