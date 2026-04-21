@@ -1073,15 +1073,15 @@ class ParameterPanel(QWidget):
             default_cmap="viridis",
             complex_policy="abs",
         )
-        pv_layout.addWidget(w_phase_preview)
-        pv_layout.addWidget(w_amp_preview)
-        tf_layout.addWidget(preview_group)
+        pv_layout.addWidget(w_phase_preview, 1)
+        pv_layout.addWidget(w_amp_preview, 1)
+        tf_layout.addWidget(preview_group, 1)
 
         lbl_val_error = QLabel("")
         lbl_val_error.setStyleSheet("color: red; font-size: 10pt;")
         lbl_val_error.setWordWrap(True)
         lbl_val_error.setVisible(False)
-        tf_layout.addWidget(lbl_val_error)
+        tf_layout.addWidget(lbl_val_error, 0)
 
         setattr(self, f"file_preview_phase_{prefix}", w_phase_preview)
         setattr(self, f"file_preview_amp_{prefix}", w_amp_preview)
@@ -1110,7 +1110,6 @@ class ParameterPanel(QWidget):
                 le.textChanged.connect(lambda _=None, p=prefix: self._update_file_input_hint(p))
 
         
-        tf_layout.addStretch()
         mask_tabs.addTab(tab_file, "文件导入 (File Import)")
         
         # Tab 2: Parameter Definition

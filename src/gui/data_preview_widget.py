@@ -1,8 +1,8 @@
 import time
 import numpy as np
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSizePolicy
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -29,6 +29,8 @@ class DataPreviewWidget(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         header = QHBoxLayout()
         self.lbl_title = QLabel(title)
@@ -79,17 +81,31 @@ class DataPreviewWidget(QWidget):
         self.err_label.setVisible(False)
         root.addWidget(self.err_label)
 
-        self.fig = Figure(figsize=(4, 3), dpi=100)
+        self.fig = Figure(figsize=(5.6, 4.2), dpi=100)
         self.canvas = FigureCanvas(self.fig)
         self.toolbar = NavigationToolbar(self.canvas, self)
-        root.addWidget(self.toolbar)
-        root.addWidget(self.canvas)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.toolbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.canvas.setMinimumHeight(260)
+        root.addWidget(self.toolbar, 0)
+        root.addWidget(self.canvas, 1)
+
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(120)
+        self._resize_timer.timeout.connect(self._render_if_ready)
 
         self.combo_mode.currentIndexChanged.connect(self._render_if_ready)
         self.combo_cmap.currentIndexChanged.connect(self._render_if_ready)
         self.cb_colorbar.toggled.connect(self._render_if_ready)
 
         self.set_placeholder("未加载 (Not Loaded)")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._data is None:
+            return
+        self._resize_timer.start()
 
     def set_placeholder(self, message: str):
         self._data = None
@@ -164,8 +180,22 @@ class DataPreviewWidget(QWidget):
 
         mode = self.combo_mode.currentText()
         is_3d = "3D" in mode
-        max_size = 128 if is_3d else 512
+        if is_3d:
+            max_size = 128
+        else:
+            try:
+                w, h = self.canvas.get_width_height()
+                max_size = int(min(2048, max(512, max(w, h))))
+            except Exception:
+                max_size = 512
         view = self._downsample(arr, max_size=max_size)
+
+        try:
+            w, h = self.canvas.get_width_height()
+            if w > 0 and h > 0:
+                self.fig.set_size_inches(w / self.fig.dpi, h / self.fig.dpi, forward=False)
+        except Exception:
+            pass
 
         self.fig.clear()
         self._cbar = None
@@ -202,13 +232,17 @@ class DataPreviewWidget(QWidget):
             if self._extent_um is not None:
                 imshow_kwargs["extent"] = self._extent_um
             im = ax.imshow(view, **imshow_kwargs)
+            ax.set_aspect("equal", adjustable="box")
             ax.set_title(self._title, fontsize=10)
             ax.set_xlabel("X (μm)")
             ax.set_ylabel("Y (μm)")
             if show_cbar:
                 self._cbar = self.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        self.fig.tight_layout()
+        try:
+            self.fig.tight_layout(pad=0.6)
+        except Exception:
+            pass
         self.canvas.draw_idle()
 
         ny0, nx0 = arr.shape
