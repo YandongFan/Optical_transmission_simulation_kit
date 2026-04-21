@@ -541,6 +541,15 @@ class PlotCanvas(FigureCanvas):
         
         self.fig.clf() 
         ax = self.fig.add_subplot(111)
+        if data is None or (hasattr(data, "size") and data.size == 0):
+            ax.set_title(title)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.text(0.5, 0.5, "无可用数据", ha="center", va="center", transform=ax.transAxes, color="red")
+            self.current_ax = ax
+            self.fig.tight_layout()
+            self.draw()
+            return
         im = ax.imshow(data, extent=extent, origin='lower', cmap=cmap, aspect='auto')
         ax.set_title(title)
         ax.set_xlabel(xlabel)

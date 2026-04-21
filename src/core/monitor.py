@@ -69,7 +69,9 @@ class Monitor:
         min_v, max_v = self.ranges[axis_name]
         mask = (axis_values >= min_v) & (axis_values <= max_v)
         if not np.any(mask):
-            return slice(0, 0), np.array([])
+            mid = 0.5 * (min_v + max_v)
+            idx = int(np.abs(axis_values - mid).argmin())
+            return slice(idx, idx + 1), axis_values[idx:idx + 1]
             
         indices = np.where(mask)[0]
         start, end = indices[0], indices[-1] + 1

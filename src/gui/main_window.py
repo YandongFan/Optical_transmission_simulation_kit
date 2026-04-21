@@ -16,6 +16,7 @@ from src.core.propagator import AngularSpectrumPropagator
 from src.core.modulator import SpatialModulator, AngleModulator, IdealLens, CylindricalLens
 from src.core.monitor import Monitor
 from src.utils.mask_generator import generate_annular_mask, generate_circular_mask, generate_rectangular_mask, generate_polygon_mask
+from src.gui.file_import_utils import remap_imported_matrix_to_sim_grid
 
 class MainWindow(QMainWindow):
     """
@@ -365,9 +366,9 @@ class MainWindow(QMainWindow):
         """
         运行完整仿真 (Run Full Simulation)
         """
-        # Force read from config object (Req 2.c)
-        # Instead of relying on self.field (preview cache), we regenerate source from config.
-        config = self.parameter_panel.get_latest_config()
+        # 运行时强制抓取当前 UI 最新快照，避免使用过期缓存配置
+        self.parameter_panel.sync_source_to_config()
+        config = self.parameter_panel.get_project_data()
         
         try:
             self.status_bar.showMessage("Running simulation...")
@@ -569,6 +570,21 @@ class MainWindow(QMainWindow):
             for m in xy_monitors: z_points.add(m['z'])
             
             sorted_z_points = sorted(list(z_points))
+            xy_recorded = set()
+            z_tol = 1e-7
+
+            def record_xy_monitors_between(prev_z, curr_z):
+                lo = min(prev_z, curr_z) - z_tol
+                hi = max(prev_z, curr_z) + z_tol
+                for idx, m_wrapper in enumerate(xy_monitors):
+                    if idx in xy_recorded:
+                        continue
+                    z_target = m_wrapper['z']
+                    if lo <= z_target <= hi:
+                        mon = m_wrapper['monitor']
+                        mon.record(current_field, z_target)
+                        self.visualize_monitor(mon)
+                        xy_recorded.add(idx)
             
             if not global_monitors:
                 # Fast Event Loop (Only Modulators and XY Monitors)
@@ -576,14 +592,12 @@ class MainWindow(QMainWindow):
                 total_steps = len(sorted_z_points)
                 
                 # Initial record at Z=0 for XY monitors
-                for m_wrapper in xy_monitors:
-                    if abs(m_wrapper['z'] - 0.0) < 1e-9:
-                        m_wrapper['monitor'].record(current_field, 0.0)
-                        self.visualize_monitor(m_wrapper['monitor'])
+                record_xy_monitors_between(0.0, 0.0)
 
                 for i, z in enumerate(sorted_z_points):
                     if i == 0 and z == 0.0: continue
 
+                    prev_z = current_z
                     if z > current_z:
                         dist = z - current_z
                         current_field = propagator.propagate(current_field, dist)
@@ -594,12 +608,8 @@ class MainWindow(QMainWindow):
                         if abs(e['z'] - current_z) < 1e-9:
                             current_field = self.apply_modulator(current_field, e)
                             
-                    # XY Monitors
-                    for m_wrapper in xy_monitors:
-                        if abs(m_wrapper['z'] - current_z) < 1e-9:
-                            mon = m_wrapper['monitor']
-                            mon.record(current_field, current_z)
-                            self.visualize_monitor(mon)
+                    # XY Monitors（容忍浮点误差，防止漏采样）
+                    record_xy_monitors_between(prev_z, current_z)
                             
                     self.progress_bar.setValue(int((i + 1) / total_steps * 100))
                     QApplication.processEvents()
@@ -631,14 +641,12 @@ class MainWindow(QMainWindow):
                 for gm in global_monitors:
                     gm.record(current_field, 0.0)
                     
-                for m_wrapper in xy_monitors:
-                    if abs(m_wrapper['z'] - 0.0) < 1e-9:
-                         m_wrapper['monitor'].record(current_field, 0.0)
-                         self.visualize_monitor(m_wrapper['monitor'])
+                record_xy_monitors_between(0.0, 0.0)
                 
                 for i, z in enumerate(full_z_list):
                     if i == 0 and z == 0.0: continue 
                     
+                    prev_z = current_z
                     dist = z - current_z
                     if dist > 1e-9:
                         current_field = propagator.propagate(current_field, dist)
@@ -653,12 +661,8 @@ class MainWindow(QMainWindow):
                     for gm in global_monitors:
                         gm.record(current_field, current_z)
                         
-                    # XY Monitors
-                    for m_wrapper in xy_monitors:
-                        if abs(m_wrapper['z'] - current_z) < 1e-9:
-                            mon = m_wrapper['monitor']
-                            mon.record(current_field, current_z)
-                            self.visualize_monitor(mon)
+                    # XY Monitors（容忍浮点误差，防止漏采样）
+                    record_xy_monitors_between(prev_z, current_z)
                             
                     self.progress_bar.setValue(int((i + 1) / total_steps * 100))
                     QApplication.processEvents()
@@ -679,6 +683,7 @@ class MainWindow(QMainWindow):
                                                             None, None, None, None, None, enabled=False)
 
             self.status_bar.showMessage(f"Simulation complete.")
+            self.parameter_panel.save_last_successful_file_import_params()
             
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}")
@@ -772,6 +777,29 @@ class MainWindow(QMainWindow):
                 if mode == 0: # File Import
                     amp_mask = getattr(pp, f"{prefix}_amp", None)
                     phase_mask = getattr(pp, f"{prefix}_phase", None)
+                    file_params = config.get('file_import_params', {})
+
+                    def adapt(mask_data, fill_value):
+                        if mask_data is None:
+                            return None
+                        sim_x_um = self.grid.X[0, :] * 1e6
+                        sim_y_um = self.grid.Y[:, 0] * 1e6
+                        return remap_imported_matrix_to_sim_grid(
+                            data_2d=mask_data,
+                            sim_x_um=sim_x_um,
+                            sim_y_um=sim_y_um,
+                            grid_x_um=float(file_params.get('grid_x_um', 1.0)),
+                            grid_y_um=float(file_params.get('grid_y_um', 1.0)),
+                            nx=int(file_params.get('nx', np.squeeze(np.asarray(mask_data)).shape[-1])),
+                            ny=int(file_params.get('ny', np.squeeze(np.asarray(mask_data)).shape[0])),
+                            center_x_um=float(file_params.get('center_x_um', 0.0)),
+                            center_y_um=float(file_params.get('center_y_um', 0.0)),
+                            fill_value=fill_value,
+                        )
+
+                    # 边界补全策略：振幅默认 1（不调制），相位默认 0（不加相位）
+                    amp_mask = adapt(amp_mask, fill_value=1.0)
+                    phase_mask = adapt(phase_mask, fill_value=0.0)
                     
                 elif mode == 1: # Param Definition
                     # Transmission

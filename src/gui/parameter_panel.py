@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QGroupBox,
                              QSpinBox, QLineEdit, QTableWidget, QTableWidgetItem, QTextEdit,
                              QStackedWidget, QHeaderView, QSlider)
 from PyQt6.QtGui import QAction, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, pyqtSignal as Signal, QMutex, QMutexLocker
+from PyQt6.QtCore import Qt, pyqtSignal as Signal, QMutex, QMutexLocker, QTimer, QObject, QRunnable, QThreadPool
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
@@ -15,6 +15,8 @@ import glob
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from .formula_widget import FormulaWidget
+from .data_preview_widget import DataPreviewWidget
+from .file_import_utils import compute_file_grid_validation, compute_preview_extent_um
 from .polygon_widget import PolygonEditorWidget
 from src.core.modulator import evaluate_formula
 from src.utils.mask_generator import (generate_annular_mask, generate_circular_mask, 
@@ -23,6 +25,26 @@ import json
 
 # Preset file path
 PRESET_FILE = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "preset.json")
+LAST_SUCCESS_FILE = os.path.join(os.path.expanduser("~"), ".optical_simulation_kit", "last_success_file_import.json")
+
+
+class _ValidationEmitter(QObject):
+    finished = Signal(str, int, bool, str)
+
+
+class _FileGridValidationWorker(QRunnable):
+    def __init__(self, prefix, token, nx, ny, file_shapes, emitter):
+        super().__init__()
+        self.prefix = prefix
+        self.token = token
+        self.nx = nx
+        self.ny = ny
+        self.file_shapes = file_shapes
+        self.emitter = emitter
+
+    def run(self):
+        ok, msg = compute_file_grid_validation(self.nx, self.ny, self.file_shapes)
+        self.emitter.finished.emit(self.prefix, self.token, ok, msg)
 
 class EquationDisplay(FigureCanvas):
     def __init__(self, parent=None, width=5, height=1, dpi=100):
@@ -135,8 +157,19 @@ class ParameterPanel(QWidget):
         self.mod1_amp_path = None
         self.mod2_phase = None
         self.mod2_phase_path = None
+        self.mod2_amp = None
+        self.mod2_amp_path = None
         self.mod2_angle_trans = None
         self.mod2_angle_path = None
+        self.file_import_params = {
+            'mod1': {'grid_x_um': 1.0, 'grid_y_um': 1.0, 'nx': 512, 'ny': 512, 'center_x_um': 1.0, 'center_y_um': 1.0},
+            'mod2': {'grid_x_um': 1.0, 'grid_y_um': 1.0, 'nx': 512, 'ny': 512, 'center_x_um': 1.0, 'center_y_um': 1.0},
+        }
+        self._file_validation_state = {'mod1': '', 'mod2': ''}
+        self._validation_tokens = {'mod1': 0, 'mod2': 0}
+        self._validation_emitter = _ValidationEmitter()
+        self._validation_emitter.finished.connect(self._on_async_validation_finished)
+        self._validation_pool = QThreadPool.globalInstance()
         
         # Monitor List
         self.monitors = [] # List of dicts: {'name': str, 'z': float, 'plane': int, 'type': int}
@@ -163,7 +196,6 @@ class ParameterPanel(QWidget):
         self.simulation_config = {}
         
         # Debounce timer for saving preset
-        from PyQt6.QtCore import QTimer
         self.preset_save_timer = QTimer()
         self.preset_save_timer.setSingleShot(True)
         self.preset_save_timer.setInterval(1000) # Save after 1 second of inactivity
@@ -171,6 +203,7 @@ class ParameterPanel(QWidget):
         
         # Initial Sync & Load Preset
         self.load_preset()
+        self.load_last_successful_file_import_params()
         self.sync_source_to_config()
         
     def generate_geom_mask_for_preview(self, prefix, c_type, X_m, Y_m):
@@ -288,6 +321,34 @@ class ParameterPanel(QWidget):
                 json.dump(data, f, indent=4)
         except Exception as e:
             print(f"Failed to save preset: {e}")
+
+    def save_last_successful_file_import_params(self):
+        """
+        仅记录“成功运行”时的文件导入参数，作为下次打开界面的默认值
+        """
+        try:
+            data = {
+                'mod1': self._collect_file_import_params_from_ui('mod1'),
+                'mod2': self._collect_file_import_params_from_ui('mod2')
+            }
+            os.makedirs(os.path.dirname(LAST_SUCCESS_FILE), exist_ok=True)
+            with open(LAST_SUCCESS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Failed to save last successful file-import params: {e}")
+
+    def load_last_successful_file_import_params(self):
+        try:
+            if not os.path.exists(LAST_SUCCESS_FILE):
+                return
+            with open(LAST_SUCCESS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            for prefix in ['mod1', 'mod2']:
+                if prefix not in data:
+                    continue
+                self._set_file_import_params_to_ui(prefix, data[prefix], trigger_change=False)
+        except Exception as e:
+            print(f"Failed to load last successful file-import params: {e}")
 
     def load_preset(self):
         """
@@ -942,6 +1003,112 @@ class ParameterPanel(QWidget):
         
         setattr(self, f"btn_load_amp{prefix[-1]}", btn_amp)
         setattr(self, f"lbl_amp{prefix[-1]}_status", lbl_amp)
+
+        params_group = QGroupBox("导入网格参数 (Import Grid Parameters)")
+        params_group.setVisible(False)
+        p_layout = QFormLayout(params_group)
+        p_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        sb_grid_x = QDoubleSpinBox()
+        sb_grid_x.setRange(1e-12, 1e9)
+        sb_grid_x.setDecimals(9)
+        sb_grid_x.setSingleStep(0.01)
+        sb_grid_x.setValue(self.file_import_params[prefix]['grid_x_um'])
+        sb_grid_x.setSuffix(" μm")
+
+        sb_grid_y = QDoubleSpinBox()
+        sb_grid_y.setRange(1e-12, 1e9)
+        sb_grid_y.setDecimals(9)
+        sb_grid_y.setSingleStep(0.01)
+        sb_grid_y.setValue(self.file_import_params[prefix]['grid_y_um'])
+        sb_grid_y.setSuffix(" μm")
+
+        sb_nx = QSpinBox()
+        sb_nx.setRange(1, 100000000)
+        sb_nx.setValue(int(self.file_import_params[prefix]['nx']))
+
+        sb_ny = QSpinBox()
+        sb_ny.setRange(1, 100000000)
+        sb_ny.setValue(int(self.file_import_params[prefix]['ny']))
+
+        sb_center_x = QDoubleSpinBox()
+        sb_center_x.setRange(1e-12, 1e9)
+        sb_center_x.setDecimals(9)
+        sb_center_x.setSingleStep(0.01)
+        sb_center_x.setValue(self.file_import_params[prefix]['center_x_um'])
+        sb_center_x.setSuffix(" μm")
+
+        sb_center_y = QDoubleSpinBox()
+        sb_center_y.setRange(1e-12, 1e9)
+        sb_center_y.setDecimals(9)
+        sb_center_y.setSingleStep(0.01)
+        sb_center_y.setValue(self.file_import_params[prefix]['center_y_um'])
+        sb_center_y.setSuffix(" μm")
+
+        p_layout.addRow("grid x (μm):", sb_grid_x)
+        p_layout.addRow("grid y (μm):", sb_grid_y)
+        p_layout.addRow("Nx number:", sb_nx)
+        p_layout.addRow("Ny number:", sb_ny)
+        p_layout.addRow("center x (μm):", sb_center_x)
+        p_layout.addRow("center y (μm):", sb_center_y)
+
+        lbl_input_hint = QLabel("")
+        lbl_input_hint.setStyleSheet("color: red; font-size: 9pt;")
+        lbl_input_hint.setVisible(False)
+        p_layout.addRow(lbl_input_hint)
+
+        tf_layout.addWidget(params_group)
+
+        preview_group = QGroupBox("预览 (Preview)")
+        pv_layout = QVBoxLayout(preview_group)
+        w_phase_preview = DataPreviewWidget(
+            title="相位预览 (Phase Preview)",
+            allow_3d=True,
+            default_cmap="twilight",
+            complex_policy="angle",
+        )
+        w_amp_preview = DataPreviewWidget(
+            title="透射率预览 (Transmission Preview)",
+            allow_3d=False,
+            default_cmap="viridis",
+            complex_policy="abs",
+        )
+        pv_layout.addWidget(w_phase_preview)
+        pv_layout.addWidget(w_amp_preview)
+        tf_layout.addWidget(preview_group)
+
+        lbl_val_error = QLabel("")
+        lbl_val_error.setStyleSheet("color: red; font-size: 10pt;")
+        lbl_val_error.setWordWrap(True)
+        lbl_val_error.setVisible(False)
+        tf_layout.addWidget(lbl_val_error)
+
+        setattr(self, f"file_preview_phase_{prefix}", w_phase_preview)
+        setattr(self, f"file_preview_amp_{prefix}", w_amp_preview)
+        setattr(self, f"file_params_group_{prefix}", params_group)
+        setattr(self, f"sb_file_grid_x_{prefix}", sb_grid_x)
+        setattr(self, f"sb_file_grid_y_{prefix}", sb_grid_y)
+        setattr(self, f"sb_file_nx_{prefix}", sb_nx)
+        setattr(self, f"sb_file_ny_{prefix}", sb_ny)
+        setattr(self, f"sb_file_center_x_{prefix}", sb_center_x)
+        setattr(self, f"sb_file_center_y_{prefix}", sb_center_y)
+        setattr(self, f"lbl_file_input_hint_{prefix}", lbl_input_hint)
+        setattr(self, f"lbl_file_validation_{prefix}", lbl_val_error)
+
+        timer_preview = QTimer(self)
+        timer_preview.setSingleShot(True)
+        timer_preview.setInterval(200)
+        timer_preview.timeout.connect(lambda p=prefix: self._refresh_file_import_previews(p))
+        setattr(self, f"timer_file_preview_{prefix}", timer_preview)
+
+        for sb in [sb_grid_x, sb_grid_y, sb_nx, sb_ny, sb_center_x, sb_center_y]:
+            sb.valueChanged.connect(lambda _=None, p=prefix: self._on_file_import_param_changed(p))
+
+        for sb in [sb_grid_x, sb_grid_y, sb_center_x, sb_center_y]:
+            le = sb.lineEdit()
+            if le is not None:
+                le.textChanged.connect(lambda _=None, p=prefix: self._update_file_input_hint(p))
+
         
         tf_layout.addStretch()
         mask_tabs.addTab(tab_file, "文件导入 (File Import)")
@@ -1742,12 +1909,14 @@ class ParameterPanel(QWidget):
                     'NA': getattr(self, f"sb_{prefix}_NA").value()
                 }
             }
+            mod_data['file_import_params'] = self._collect_file_import_params_from_ui(prefix)
             # Paths
             if prefix == 'mod1':
                 mod_data['phase_path'] = self.mod1_phase_path
                 mod_data['amp_path'] = self.mod1_amp_path
             else:
                 mod_data['phase_path'] = self.mod2_phase_path
+                mod_data['amp_path'] = self.mod2_amp_path
                 mod_data['angle_path'] = self.mod2_angle_path
             
             # Custom Mask Definition
@@ -1871,6 +2040,9 @@ class ParameterPanel(QWidget):
                     getattr(self, f"sb_{prefix}_f").setValue(l.get('f', 100000))
                     getattr(self, f"combo_{prefix}_f_unit").setCurrentText(l.get('f_unit', 'um'))
                     getattr(self, f"sb_{prefix}_NA").setValue(l.get('NA', 0.127))
+                
+                if 'file_import_params' in m:
+                    self._set_file_import_params_to_ui(prefix, m.get('file_import_params', {}), trigger_change=False)
                     
                 # Load files if paths exist
                 # This might fail if files moved. Log warning?
@@ -1881,7 +2053,9 @@ class ParameterPanel(QWidget):
                     if m.get('amp_path'): self.load_data('amp1', m['amp_path'])
                 else:
                     if m.get('phase_path'): self.load_data('phase2', m['phase_path'])
+                    if m.get('amp_path'): self.load_data('amp2', m['amp_path'])
                     if m.get('angle_path'): self.load_data('angle2', m['angle_path'])
+                self._on_file_import_param_changed(prefix)
                 
                 # Load Custom Mask Definition
                 if 'custom_mask' in m:
@@ -1978,10 +2152,155 @@ class ParameterPanel(QWidget):
             if self.monitors:
                 self.monitor_list.setCurrentRow(0)
 
+    def _collect_file_import_params_from_ui(self, prefix):
+        if not hasattr(self, f"sb_file_grid_x_{prefix}"):
+            return dict(self.file_import_params.get(prefix, {}))
+        params = {
+            'grid_x_um': float(getattr(self, f"sb_file_grid_x_{prefix}").value()),
+            'grid_y_um': float(getattr(self, f"sb_file_grid_y_{prefix}").value()),
+            'nx': int(getattr(self, f"sb_file_nx_{prefix}").value()),
+            'ny': int(getattr(self, f"sb_file_ny_{prefix}").value()),
+            'center_x_um': float(getattr(self, f"sb_file_center_x_{prefix}").value()),
+            'center_y_um': float(getattr(self, f"sb_file_center_y_{prefix}").value()),
+        }
+        self.file_import_params[prefix] = params
+        return params
+
+    def _set_file_import_params_to_ui(self, prefix, params, trigger_change=True):
+        current = dict(self.file_import_params.get(prefix, {}))
+        current.update(params or {})
+        self.file_import_params[prefix] = current
+        if not hasattr(self, f"sb_file_grid_x_{prefix}"):
+            return
+        widgets = {
+            f"sb_file_grid_x_{prefix}": current['grid_x_um'],
+            f"sb_file_grid_y_{prefix}": current['grid_y_um'],
+            f"sb_file_nx_{prefix}": int(current['nx']),
+            f"sb_file_ny_{prefix}": int(current['ny']),
+            f"sb_file_center_x_{prefix}": current['center_x_um'],
+            f"sb_file_center_y_{prefix}": current['center_y_um'],
+        }
+        for attr, val in widgets.items():
+            w = getattr(self, attr)
+            w.blockSignals(True)
+            w.setValue(val)
+            w.blockSignals(False)
+        if trigger_change:
+            self._on_file_import_param_changed(prefix)
+
+    def _on_file_import_param_changed(self, prefix):
+        self._collect_file_import_params_from_ui(prefix)
+        self._update_file_input_hint(prefix)
+        timer_preview = getattr(self, f"timer_file_preview_{prefix}", None)
+        if timer_preview is not None:
+            timer_preview.start()
+        self._schedule_async_file_validation(prefix)
+
+    def _update_file_input_hint(self, prefix):
+        lbl = getattr(self, f"lbl_file_input_hint_{prefix}", None)
+        if lbl is None:
+            return
+        invalid = False
+        for name in [f"sb_file_grid_x_{prefix}", f"sb_file_grid_y_{prefix}", f"sb_file_center_x_{prefix}", f"sb_file_center_y_{prefix}"]:
+            sb = getattr(self, name, None)
+            if sb is None:
+                continue
+            le = sb.lineEdit()
+            if le is not None and not le.hasAcceptableInput():
+                invalid = True
+                break
+        lbl.setVisible(invalid)
+        if invalid:
+            lbl.setText("输入非法：仅允许正数")
+
+    def _squeezed_2d_shape(self, arr):
+        if arr is None:
+            return None
+        a = np.asarray(arr)
+        a = np.squeeze(a)
+        if a.ndim != 2:
+            return None
+        return (int(a.shape[0]), int(a.shape[1]))
+
+    def _schedule_async_file_validation(self, prefix):
+        params = self._collect_file_import_params_from_ui(prefix)
+        file_shapes = []
+        if prefix == 'mod1':
+            file_shapes.append(self._squeezed_2d_shape(self.mod1_phase))
+            file_shapes.append(self._squeezed_2d_shape(self.mod1_amp))
+        else:
+            file_shapes.append(self._squeezed_2d_shape(self.mod2_phase))
+            file_shapes.append(self._squeezed_2d_shape(self.mod2_amp))
+        file_shapes = [s for s in file_shapes if s is not None]
+
+        self._validation_tokens[prefix] += 1
+        token = self._validation_tokens[prefix]
+        worker = _FileGridValidationWorker(
+            prefix=prefix,
+            token=token,
+            nx=params['nx'],
+            ny=params['ny'],
+            file_shapes=file_shapes,
+            emitter=self._validation_emitter
+        )
+        self._validation_pool.start(worker)
+
+    def _on_async_validation_finished(self, prefix, token, ok, msg):
+        if token != self._validation_tokens.get(prefix, -1):
+            return
+        lbl = getattr(self, f"lbl_file_validation_{prefix}", None)
+        if lbl is not None:
+            if ok:
+                lbl.clear()
+                lbl.setVisible(False)
+            else:
+                lbl.setText(msg)
+                lbl.setVisible(True)
+        self._file_validation_state[prefix] = '' if ok else msg
+        if ok:
+            all_ok = all(not self._file_validation_state.get(p) for p in ['mod1', 'mod2'])
+            if all_ok:
+                self.btn_run.setEnabled(self.btn_preview.isEnabled())
+        else:
+            self.btn_run.setEnabled(False)
+
+    def _ensure_file_import_controls_visible(self, prefix):
+        grp = getattr(self, f"file_params_group_{prefix}", None)
+        if grp is not None:
+            grp.setVisible(True)
+
+    def _compute_preview_extent_um(self, prefix):
+        p = self._collect_file_import_params_from_ui(prefix)
+        return compute_preview_extent_um(
+            p['grid_x_um'],
+            p['grid_y_um'],
+            p['nx'],
+            p['ny'],
+            p['center_x_um'],
+            p['center_y_um'],
+        )
+
     def load_data(self, target, path=None):
         """
         加载数据文件 (Load data file)
         """
+        def target_to_prefix(t: str):
+            if t.endswith('1'):
+                return 'mod1'
+            if t.endswith('2'):
+                return 'mod2'
+            return None
+
+        def target_to_kind(t: str):
+            if t.startswith('phase'):
+                return 'phase'
+            if t.startswith('amp'):
+                return 'amp'
+            return None
+
+        prefix = target_to_prefix(target)
+        kind = target_to_kind(target)
+
         if path is None:
             filename, _ = QFileDialog.getOpenFileName(self, "Open File", "", "Data Files (*.csv *.mat)")
         else:
@@ -1998,10 +2317,12 @@ class ParameterPanel(QWidget):
                     QMessageBox.critical(self, "Error", "未找到匹配的文件")
                 else:
                     print(f"未找到匹配的文件: {filename}")
+                self._set_file_import_preview_error(prefix, kind, f"未找到匹配的文件：{filename}")
                 return
             filename = matches[0]
 
         if not os.path.exists(filename):
+            self._set_file_import_preview_error(prefix, kind, f"文件不存在：{filename}")
             return
             
         try:
@@ -2025,6 +2346,8 @@ class ParameterPanel(QWidget):
                         f.visititems(collect)
                         if datasets:
                             data = datasets[0][()]
+            if data is None:
+                raise ValueError("文件中未找到可用的数据变量/数据集")
             
             if data is not None:
                 if target == 'phase1':
@@ -2039,14 +2362,79 @@ class ParameterPanel(QWidget):
                     self.mod2_phase = data
                     self.mod2_phase_path = filename
                     self.lbl_phase2_status.setText(f"Loaded: {os.path.basename(filename)}")
+                elif target == 'amp2':
+                    self.mod2_amp = data
+                    self.mod2_amp_path = filename
+                    self.lbl_amp2_status.setText(f"Loaded: {os.path.basename(filename)}")
                 elif target == 'angle2':
                     self.mod2_angle_trans = data
                     self.mod2_angle_path = filename
                     self.lbl_angle2_status.setText(f"Loaded: {os.path.basename(filename)}")
+            
+            if prefix is not None:
+                self._ensure_file_import_controls_visible(prefix)
+                self._refresh_file_import_previews(prefix)
+                self._schedule_async_file_validation(prefix)
                     
         except Exception as e:
             if path is None:
                 QMessageBox.critical(self, "Error", f"Error loading file: {str(e)}")
             else:
                 print(f"Error loading background file {filename}: {e}")
+            self._set_file_import_preview_error(prefix, kind, f"文件解析失败：{e}")
+
+    def _set_file_import_preview_error(self, prefix: str | None, kind: str | None, message: str):
+        if prefix is None or kind is None:
+            return
+        w = getattr(self, f"file_preview_{kind}_{prefix}", None)
+        if w is not None:
+            w.set_error(message)
+
+    def _refresh_file_import_previews(self, prefix: str):
+        w_phase = getattr(self, f"file_preview_phase_{prefix}", None)
+        w_amp = getattr(self, f"file_preview_amp_{prefix}", None)
+        if w_phase is None or w_amp is None:
+            return
+        x_min, x_max, y_min, y_max = self._compute_preview_extent_um(prefix)
+        w_phase.set_extent_um(x_min, x_max, y_min, y_max)
+        w_amp.set_extent_um(x_min, x_max, y_min, y_max)
+
+        if prefix == 'mod1':
+            phase = self.mod1_phase
+            amp = self.mod1_amp
+        else:
+            phase = getattr(self, "mod2_phase", None)
+            amp = getattr(self, "mod2_amp", None)
+
+        def squeeze_shape(x):
+            if x is None:
+                return None
+            arr = np.asarray(x)
+            arr = np.squeeze(arr)
+            return arr.shape, arr.ndim
+
+        shp_p = squeeze_shape(phase)
+        shp_a = squeeze_shape(amp)
+        if shp_p is not None and shp_a is not None and shp_p[1] == 2 and shp_a[1] == 2:
+            if shp_p[0] != shp_a[0]:
+                msg = f"相位与透射率尺寸不一致：phase={shp_p[0]}，trans={shp_a[0]}"
+                w_phase.set_error(msg)
+                w_amp.set_error(msg)
+                return
+
+        if phase is None:
+            if amp is None:
+                w_phase.set_placeholder("未加载 (Not Loaded)")
+            else:
+                w_phase.set_error("数据缺失：未加载相位文件")
+        else:
+            w_phase.set_data(phase)
+
+        if amp is None:
+            if phase is None:
+                w_amp.set_placeholder("未加载 (Not Loaded)")
+            else:
+                w_amp.set_error("数据缺失：未加载透射率文件")
+        else:
+            w_amp.set_data(amp)
 
